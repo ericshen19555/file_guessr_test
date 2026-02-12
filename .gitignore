@@ -23,3 +23,8 @@ Thumbs.db
 
 # Logs
 *.log
+
+
+#debug 
+run_diagnose.bat
+debug_run.bat
