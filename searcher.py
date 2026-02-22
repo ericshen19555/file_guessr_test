@@ -1,5 +1,5 @@
 """
-Searcher - Query expansion + FTS5 search.
+Searcher - Query expansion + Elasticsearch search.
 """
 from llm import expand_query
 from database import search as db_search
@@ -9,7 +9,7 @@ async def search_files(query: str, limit: int = 20) -> dict:
     """
     Search files using natural language query.
     1. Expand query with LLM (add synonyms, translate to English)
-    2. Search FTS5 with expanded keywords
+    2. Search Elasticsearch with expanded keywords
     3. Return ranked results
     """
     try:
@@ -17,7 +17,7 @@ async def search_files(query: str, limit: int = 20) -> dict:
         expanded_query = await expand_query(query)
         print(f"[Search] Original: '{query}' → Expanded: '{expanded_query}'")
 
-        # Step 2: FTS5 search
+        # Step 2: Elasticsearch search
         results = db_search(expanded_query, limit=limit)
 
         # Step 3: Format results

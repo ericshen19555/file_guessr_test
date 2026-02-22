@@ -143,22 +143,24 @@ Include 20-40 keywords covering all aspects of the image."""
 async def expand_query(user_query: str) -> str:
     """
     Expand a natural language query into comprehensive English search keywords.
-    Returns a space-separated string of keywords for FTS5 search.
+    Returns a space-separated string of keywords for Elasticsearch search.
     """
-    prompt = f"""You are a search query expansion assistant. The user wants to find files on their computer.
+    prompt = f"""You are an expert search query expansion system. The user wants to find files on their computer based on a natural language query.
 
 USER QUERY: {user_query}
 
 INSTRUCTIONS:
-- Convert the query into English search keywords
-- Add synonyms, related concepts, and associated terms
-- Include translations if the query is in another language
-- Think about what words might appear in relevant files
-- For visual concepts, include words that would describe such images
-- Example: "沙灘照片" → beach sand ocean sea coast shore waves tropical photo sunny water palm summer vacation seaside
+1. Extract the core intent from the query.
+2. Generate highly relevant English search keywords to match the files they are looking for.
+3. Include synonyms, related technical terms, broad categories, and specific examples.
+4. If the query is not in English, translate the core concepts into English keywords.
+5. For visual concepts, include words describing the image contents (colors, objects, scenes).
+6. Example: "沙灘照片" → beach sand ocean sea coast shore waves tropical photo sunny water vacation seaside nature
 
-Respond with ONLY a single line of space-separated English keywords (15-25 keywords).
-Do NOT include any explanation, just the keywords."""
+CRITICAL:
+Respond with ONLY a single line of space-separated English keywords (15-30 keywords).
+DO NOT include prefixes like "Here are the keywords:" or "Keywords:".
+DO NOT include any explanation or punctuation. JUST THE WORDS."""
 
     try:
         response = await _chat(prompt)
@@ -213,3 +215,59 @@ async def check_ollama_status() -> dict:
             "error": str(e),
             "required_model": MODEL_NAME,
         }
+
+
+async def expand_query_with_file(user_query: str, file_content: Optional[str] = None,
+                                  image_path: Optional[str] = None) -> str:
+    """
+    Expand a search query using both text and an uploaded file.
+    The LLM analyzes the file content/image + user query together to
+    generate comprehensive search keywords.
+    """
+    context_parts = []
+
+    if user_query:
+        context_parts.append(f"USER TEXT QUERY: {user_query}")
+
+    if file_content:
+        context_parts.append(f"UPLOADED FILE CONTENT:\n{file_content[:3000]}")
+
+    context = "\n\n".join(context_parts)
+
+    prompt = f"""You are an expert search query expansion system. The user wants to find SIMILAR files on their computer.
+They have provided the following context:
+
+{context}
+
+INSTRUCTIONS:
+1. Analyze BOTH the user's text description AND the uploaded file content/image.
+2. Generate highly relevant English search keywords that would match SIMILAR files.
+3. Include synonyms, related concepts, broader categories, and domain-specific terms.
+4. For images: extract visual elements, objects, colors, themes, styles, and text within the image.
+5. For documents: extract key topics, main subjects, technical jargon, and named entities.
+6. Think about what metadata or content would exist in files similar to what the user is looking for.
+
+CRITICAL:
+Respond with ONLY a single line of space-separated English keywords (25-45 keywords).
+DO NOT include prefixes like "Here are the keywords:" or "Keywords:".
+DO NOT include any explanation or punctuation. JUST THE WORDS."""
+
+    try:
+        response = await _chat(prompt, image_path=image_path)
+        if not response:
+            return user_query or ""
+
+        # Clean up
+        keywords = response.strip().strip('"').strip("'")
+        lines = keywords.split("\n")
+        for line in reversed(lines):
+            line = line.strip()
+            if line and len(line.split()) > 1:
+                keywords = line
+                break
+
+        keywords = re.sub(r'^(keywords:|answer:|result:)\s*', '', keywords, flags=re.IGNORECASE)
+        return keywords
+    except Exception as e:
+        print(f"[LLM] Error expanding query with file: {e}")
+        return user_query or ""

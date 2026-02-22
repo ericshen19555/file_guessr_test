@@ -89,7 +89,7 @@ class WatcherManager:
         """Add a folder to watch if not already watched."""
         if folder_path in self.watched_paths:
             return
-        
+
         if not os.path.isdir(folder_path):
             return
 
@@ -100,6 +100,14 @@ class WatcherManager:
             print(f"[Watcher] Watching: {folder_path}")
         except Exception as e:
             print(f"[Watcher] Failed to watch {folder_path}: {e}")
+
+    def remove_watch(self, folder_path: str):
+        """Remove a folder from watching."""
+        self.watched_paths.discard(folder_path)
+        # Note: watchdog Observer doesn't easily support unscheduling
+        # individual watches, so the folder will stop being watched
+        # on next restart. We remove it from our tracked set.
+        print(f"[Watcher] Removed watch: {folder_path}")
 
 
 # Global instance

@@ -37,6 +37,15 @@ if %errorlevel% neq 0 (
 )
 
 echo.
+echo ==================================================
 echo [SUCCESS] Environment fixed!
-echo You can now run 'run.bat' normally.
+echo ==================================================
+echo.
+echo IMPORTANT: You also need Elasticsearch running!
+echo   1. Download from https://www.elastic.co/downloads/elasticsearch
+echo   2. Extract and run bin\elasticsearch.bat
+echo   3. Then run run.bat to start File Guessr
+echo.
+echo (Without ES, search will still work but without fuzzy matching)
+echo.
 pause

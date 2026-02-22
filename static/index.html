@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="zh-TW">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -8,8 +9,9 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/static/style.css">
+    <link rel="stylesheet" href="/static/style.css?v=2">
 </head>
+
 <body>
     <div class="app">
         <!-- Header -->
@@ -31,16 +33,24 @@
         <main class="main">
             <div class="search-container">
                 <div class="search-box">
-                    <input
-                        type="text"
-                        id="search-input"
-                        placeholder="用自然語言搜尋你的檔案... 例如：有關沙灘的照片、會議記錄、Python程式碼"
-                        autocomplete="off"
-                    >
+                    <input type="text" id="search-input" placeholder="用自然語言搜尋你的檔案... 例如：有關沙灘的照片、會議記錄、Python程式碼"
+                        autocomplete="off">
+                    <label class="btn btn-ghost btn-attach" id="btn-attach" title="附加檔案搜尋">
+                        📎
+                        <input type="file" id="search-file-input" style="display:none" onchange="onFileAttached(this)">
+                    </label>
                     <button class="btn btn-primary" id="btn-search" onclick="doSearch()">
                         搜尋
                     </button>
                 </div>
+
+                <!-- Attached file preview -->
+                <div class="attached-file" id="attached-file" style="display:none;">
+                    <span class="attached-icon">📄</span>
+                    <span class="attached-name" id="attached-name"></span>
+                    <button class="btn-remove-attach" onclick="removeAttachment()" title="移除附件">✕</button>
+                </div>
+
                 <div class="search-meta" id="search-meta"></div>
             </div>
 
@@ -50,6 +60,7 @@
                     <div class="empty-icon">📂</div>
                     <h2>開始搜尋你的檔案</h2>
                     <p>先在「索引管理」中新增資料夾，然後用自然語言搜尋</p>
+                    <p class="text-muted" style="margin-top:8px;font-size:0.8rem">💡 你也可以附加檔案（圖片/文件），讓 AI 找出類似的檔案</p>
                 </div>
             </div>
         </main>
@@ -62,19 +73,18 @@
                 <button class="btn btn-ghost" onclick="hidePanel()">✕</button>
             </div>
             <div class="panel-body">
-                <!-- Index Folder -->
+                <!-- Add New Folder -->
                 <div class="card">
                     <h3>📁 新增資料夾</h3>
-                    <div class="input-group">
-                        <input
-                            type="text"
-                            id="folder-input"
-                            placeholder="輸入資料夾路徑，例如 C:\Users\Documents"
-                        >
-                        <button class="btn btn-primary" id="btn-index" onclick="startIndex()">
-                            開始索引
+                    <div class="folder-add-row">
+                        <button class="btn btn-primary" id="btn-browse" onclick="browseFolderPath()">
+                            📂 選擇資料夾
                         </button>
+                        <span class="selected-folder-path" id="selected-folder-path">尚未選擇</span>
                     </div>
+                    <button class="btn btn-primary btn-start-index" id="btn-index" onclick="startIndex()" disabled>
+                        🚀 開始索引
+                    </button>
                 </div>
 
                 <!-- Progress -->
@@ -93,6 +103,14 @@
                     </div>
                 </div>
 
+                <!-- Watched Folders -->
+                <div class="card">
+                    <h3>👁️ 已監控資料夾</h3>
+                    <div id="watched-folders-list">
+                        <p class="text-muted">載入中...</p>
+                    </div>
+                </div>
+
                 <!-- Stats -->
                 <div class="card">
                     <h3>📊 索引統計</h3>
@@ -100,12 +118,14 @@
                         <p class="text-muted">載入中...</p>
                     </div>
                     <button class="btn btn-ghost btn-sm" onclick="loadStats()" style="margin-top:12px;">🔄 重新整理</button>
-                    <button class="btn btn-danger btn-sm" onclick="clearIndex()" style="margin-top:12px; margin-left:8px;">🗑️ 清除索引</button>
+                    <button class="btn btn-danger btn-sm" onclick="clearIndex()"
+                        style="margin-top:12px; margin-left:8px;">🗑️ 清除索引</button>
                 </div>
             </div>
         </div>
     </div>
 
-    <script src="/static/app.js"></script>
+    <script src="/static/app.js?v=2"></script>
 </body>
+
 </html>

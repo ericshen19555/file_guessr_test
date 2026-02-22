@@ -1,5 +1,8 @@
 @echo off
-echo [INFO] Starting File Guessr...
+echo ==================================================
+echo       File Guessr - Launcher
+echo ==================================================
+echo.
 
 :: Check if venv exists
 if not exist "venv\Scripts\python.exe" (
@@ -9,12 +12,15 @@ if not exist "venv\Scripts\python.exe" (
     exit /b 1
 )
 
+echo [INFO] Starting File Guessr...
+echo.
+
 :: Run the launcher directly using venv python
-:: This avoids issues with activate.bat or global python interference
 "venv\Scripts\python.exe" launcher.py
 
 if %errorlevel% neq 0 (
     echo.
     echo [ERROR] Application crashed with code %errorlevel%
-    pause
 )
+
+pause

@@ -5,6 +5,8 @@ const API = '';
 // ── State ──
 let isSearching = false;
 let pollingInterval = null;
+let selectedFolderPath = null;
+let attachedFile = null;
 
 // ── Initialize ──
 document.addEventListener('DOMContentLoaded', () => {
@@ -13,6 +15,23 @@ document.addEventListener('DOMContentLoaded', () => {
     // Enter key to search
     document.getElementById('search-input').addEventListener('keydown', (e) => {
         if (e.key === 'Enter') doSearch();
+    });
+
+    // Drag & drop on search box
+    const searchBox = document.querySelector('.search-box');
+    searchBox.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        searchBox.classList.add('drag-over');
+    });
+    searchBox.addEventListener('dragleave', () => {
+        searchBox.classList.remove('drag-over');
+    });
+    searchBox.addEventListener('drop', (e) => {
+        e.preventDefault();
+        searchBox.classList.remove('drag-over');
+        if (e.dataTransfer.files.length > 0) {
+            setAttachedFile(e.dataTransfer.files[0]);
+        }
     });
 });
 
@@ -39,11 +58,45 @@ async function checkHealth() {
     }
 }
 
+// ── File Attachment ──
+function onFileAttached(input) {
+    if (input.files.length > 0) {
+        setAttachedFile(input.files[0]);
+    }
+}
+
+function setAttachedFile(file) {
+    attachedFile = file;
+    const container = document.getElementById('attached-file');
+    const nameEl = document.getElementById('attached-name');
+    const iconEl = container.querySelector('.attached-icon');
+
+    // Set icon based on type
+    if (file.type.startsWith('image/')) {
+        iconEl.textContent = '🖼️';
+    } else if (file.name.endsWith('.pdf')) {
+        iconEl.textContent = '📕';
+    } else if (file.name.endsWith('.docx')) {
+        iconEl.textContent = '📘';
+    } else {
+        iconEl.textContent = '📄';
+    }
+
+    nameEl.textContent = file.name;
+    container.style.display = 'flex';
+}
+
+function removeAttachment() {
+    attachedFile = null;
+    document.getElementById('attached-file').style.display = 'none';
+    document.getElementById('search-file-input').value = '';
+}
+
 // ── Search ──
 async function doSearch() {
     const input = document.getElementById('search-input');
     const query = input.value.trim();
-    if (!query || isSearching) return;
+    if ((!query && !attachedFile) || isSearching) return;
 
     isSearching = true;
     const btn = document.getElementById('btn-search');
@@ -51,17 +104,40 @@ async function doSearch() {
     btn.innerHTML = '<span class="spinner"></span>';
 
     const meta = document.getElementById('search-meta');
-    meta.innerHTML = '搜尋中... (LLM 正在展開關鍵字)';
+    meta.innerHTML = '搜尋中... (LLM 正在分析' + (attachedFile ? '檔案和文字' : '關鍵字') + ')';
 
     const results = document.getElementById('results');
     results.innerHTML = '';
 
     try {
-        const res = await fetch(`${API}/api/search?q=${encodeURIComponent(query)}`);
-        const data = await res.json();
+        let data;
+
+        if (attachedFile) {
+            // Multimodal search: file + text
+            const formData = new FormData();
+            formData.append('file', attachedFile);
+            formData.append('q', query);
+
+            const res = await fetch(`${API}/api/search/multimodal`, {
+                method: 'POST',
+                body: formData,
+            });
+            data = await res.json();
+
+            if (!res.ok) {
+                throw new Error(data.error || 'Search failed');
+            }
+        } else {
+            // Text-only search
+            const res = await fetch(`${API}/api/search?q=${encodeURIComponent(query)}`);
+            data = await res.json();
+        }
 
         // Show expanded query
-        meta.innerHTML = `找到 <strong>${data.total_results}</strong> 個結果 — 
+        const fileTag = data.uploaded_file
+            ? ` + <span class="attached-tag">📎 ${escapeHtml(data.uploaded_file)}</span>`
+            : '';
+        meta.innerHTML = `找到 <strong>${data.total_results}</strong> 個結果${fileTag} — 
             展開關鍵字: <span class="expanded-query">${escapeHtml(data.expanded_query)}</span>`;
 
         if (data.results.length === 0) {
@@ -98,7 +174,7 @@ function renderResult(r, index, query) {
 
         let result = escapeHtml(text);
         queryTerms.forEach(term => {
-            if (term.length < 2) return; // Skip very short terms
+            if (term.length < 2) return;
             const regex = new RegExp(`(${term})`, 'gi');
             result = result.replace(regex, '<span class="highlight">$1</span>');
         });
@@ -107,14 +183,13 @@ function renderResult(r, index, query) {
 
     const highlightedSummary = highlight(r.summary);
 
-    // Sort keywords: matches first, then others
+    // Sort keywords: matches first
     keywords.sort((a, b) => {
         const aMatch = queryTerms.some(t => a.toLowerCase().includes(t));
         const bMatch = queryTerms.some(t => b.toLowerCase().includes(t));
         return bMatch - aMatch;
     });
 
-    // Take top 20 keywords
     const displayKeywords = keywords.slice(0, 20).map(k => {
         const isMatch = queryTerms.some(t => k.toLowerCase().includes(t));
         return `<span class="tag ${isMatch ? 'highlight' : ''}">${escapeHtml(k)}</span>`;
@@ -153,11 +228,38 @@ function renderResult(r, index, query) {
         </div>`;
 }
 
+// ── Folder Picker ──
+async function browseFolderPath() {
+    const btn = document.getElementById('btn-browse');
+    const pathDisplay = document.getElementById('selected-folder-path');
+    const indexBtn = document.getElementById('btn-index');
+
+    btn.disabled = true;
+    btn.textContent = '⏳ 開啟中...';
+
+    try {
+        const res = await fetch(`${API}/api/browse`);
+        const data = await res.json();
+
+        if (data.path) {
+            selectedFolderPath = data.path;
+            pathDisplay.textContent = data.path;
+            pathDisplay.classList.add('has-path');
+            indexBtn.disabled = false;
+        } else {
+            // User cancelled
+        }
+    } catch (err) {
+        alert('無法開啟資料夾選擇器: ' + err.message);
+    } finally {
+        btn.disabled = false;
+        btn.textContent = '📂 選擇資料夾';
+    }
+}
+
 // ── Indexing ──
 async function startIndex() {
-    const input = document.getElementById('folder-input');
-    const folder = input.value.trim();
-    if (!folder) return alert('請輸入資料夾路徑');
+    if (!selectedFolderPath) return alert('請先選擇資料夾');
 
     const btn = document.getElementById('btn-index');
     btn.disabled = true;
@@ -166,7 +268,7 @@ async function startIndex() {
         const res = await fetch(`${API}/api/index`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ folder_path: folder }),
+            body: JSON.stringify({ folder_path: selectedFolderPath }),
         });
         const data = await res.json();
 
@@ -216,9 +318,56 @@ async function updateProgress() {
             pollingInterval = null;
             document.getElementById('btn-index').disabled = false;
             loadStats();
+            loadWatchedFolders();
         }
     } catch {
         // ignore
+    }
+}
+
+// ── Watched Folders ──
+async function loadWatchedFolders() {
+    const container = document.getElementById('watched-folders-list');
+    try {
+        const res = await fetch(`${API}/api/folders`);
+        const data = await res.json();
+
+        if (!data.folders || data.folders.length === 0) {
+            container.innerHTML = '<p class="text-muted">尚未新增任何資料夾</p>';
+            return;
+        }
+
+        container.innerHTML = data.folders.map(f => `
+            <div class="watched-folder-item">
+                <span class="watched-folder-path" title="${escapeAttr(f)}">📁 ${escapeHtml(f)}</span>
+                <button class="btn-remove-folder" onclick="removeFolder('${escapeAttr(f)}')" title="移除此資料夾">
+                    🗑️
+                </button>
+            </div>
+        `).join('');
+    } catch {
+        container.innerHTML = '<p class="text-error">無法載入資料夾清單</p>';
+    }
+}
+
+async function removeFolder(path) {
+    if (!confirm(`確定要移除此資料夾的索引嗎？\n\n${path}`)) return;
+
+    try {
+        const res = await fetch(`${API}/api/folders/remove`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ folder_path: path }),
+        });
+        const data = await res.json();
+        if (res.ok) {
+            loadWatchedFolders();
+            loadStats();
+        } else {
+            alert(data.error || 'Failed to remove folder');
+        }
+    } catch (err) {
+        alert('Error: ' + err.message);
     }
 }
 
@@ -244,7 +393,12 @@ async function loadStats() {
                 </div>`)
             .join('');
 
+        const esStatus = data.search_engine === 'elasticsearch'
+            ? '<span class="es-badge online">🟢 Elasticsearch</span>'
+            : '<span class="es-badge offline">🟡 SQLite Fallback</span>';
+
         container.innerHTML = `
+            <div class="stats-header">${esStatus}</div>
             <div class="stats-grid">
                 <div class="stat-item">
                     <div class="stat-value">${data.total_files}</div>
@@ -262,6 +416,7 @@ async function clearIndex() {
     try {
         await fetch(`${API}/api/clear`, { method: 'POST' });
         loadStats();
+        loadWatchedFolders();
     } catch (err) {
         alert('Error: ' + err.message);
     }
@@ -271,7 +426,10 @@ async function clearIndex() {
 function showPanel(name) {
     document.getElementById('panel-overlay').classList.add('active');
     document.getElementById(`panel-${name}`).classList.add('active');
-    if (name === 'settings') loadStats();
+    if (name === 'settings') {
+        loadStats();
+        loadWatchedFolders();
+    }
 }
 
 function hidePanel() {
@@ -329,9 +487,7 @@ function escapeAttr(str) {
 }
 
 function openFile(path) {
-    // Copy path to clipboard as a convenience
     navigator.clipboard.writeText(path).then(() => {
-        // Show a brief toast
         const toast = document.createElement('div');
         toast.style.cssText = `
             position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);

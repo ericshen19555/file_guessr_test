@@ -206,7 +206,7 @@ body {
 
 .search-box {
     display: flex;
-    gap: 12px;
+    gap: 8px;
     background: var(--bg-card);
     border: 1px solid var(--border);
     border-radius: var(--radius-lg);
@@ -217,6 +217,12 @@ body {
 .search-box:focus-within {
     border-color: var(--border-focus);
     box-shadow: 0 0 0 4px var(--accent-subtle), var(--shadow);
+}
+
+.search-box.drag-over {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 4px var(--accent-glow), var(--shadow);
+    background: rgba(108, 92, 231, 0.05);
 }
 
 .search-box input {
@@ -232,6 +238,76 @@ body {
 
 .search-box input::placeholder {
     color: var(--text-muted);
+}
+
+/* Attach button */
+.btn-attach {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 8px 12px;
+    font-size: 1.1rem;
+    cursor: pointer;
+    border-radius: var(--radius-sm);
+    transition: all var(--transition);
+}
+
+.btn-attach:hover {
+    background: var(--accent-subtle);
+    border-color: var(--accent);
+}
+
+/* Attached file preview */
+.attached-file {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    margin-top: 8px;
+    background: var(--accent-subtle);
+    border: 1px solid rgba(108, 92, 231, 0.2);
+    border-radius: var(--radius-sm);
+    font-size: 0.85rem;
+    color: var(--accent);
+    animation: fadeInUp 0.2s ease;
+}
+
+.attached-icon {
+    font-size: 1.1rem;
+}
+
+.attached-name {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.btn-remove-attach {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-size: 0.85rem;
+    transition: all var(--transition);
+}
+
+.btn-remove-attach:hover {
+    color: var(--danger);
+    background: rgba(231, 76, 60, 0.1);
+}
+
+.attached-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 8px;
+    background: var(--accent-subtle);
+    border-radius: 12px;
+    font-size: 0.75rem;
+    color: var(--accent);
 }
 
 .search-meta {
@@ -498,6 +574,108 @@ body {
     border-color: var(--border-focus);
 }
 
+/* ── Folder Picker ── */
+.folder-add-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 12px;
+}
+
+.selected-folder-path {
+    flex: 1;
+    font-size: 0.8rem;
+    color: var(--text-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.selected-folder-path.has-path {
+    color: var(--text-primary);
+    background: var(--bg-input);
+    padding: 8px 12px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border);
+}
+
+.btn-start-index {
+    width: 100%;
+    justify-content: center;
+    padding: 12px;
+    margin-top: 16px;
+}
+
+/* ── Watched Folders List ── */
+.watched-folder-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 12px;
+    background: var(--bg-elevated);
+    border-radius: var(--radius-sm);
+    margin-bottom: 8px;
+    border: 1px solid var(--border);
+    transition: all var(--transition);
+}
+
+.watched-folder-item:hover {
+    border-color: rgba(255, 255, 255, 0.1);
+}
+
+.watched-folder-path {
+    flex: 1;
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.btn-remove-folder {
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 4px 8px;
+    border-radius: 4px;
+    font-size: 0.85rem;
+    transition: all var(--transition);
+    opacity: 0.5;
+}
+
+.btn-remove-folder:hover {
+    opacity: 1;
+    background: rgba(231, 76, 60, 0.15);
+}
+
+/* ── ES Status Badge ── */
+.es-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 12px;
+    border-radius: 20px;
+    font-size: 0.75rem;
+    font-weight: 500;
+    margin-bottom: 10px;
+}
+
+.es-badge.online {
+    background: rgba(46, 204, 113, 0.1);
+    color: var(--success);
+    border: 1px solid rgba(46, 204, 113, 0.2);
+}
+
+.es-badge.offline {
+    background: rgba(243, 156, 18, 0.1);
+    color: var(--warning);
+    border: 1px solid rgba(243, 156, 18, 0.2);
+}
+
+.stats-header {
+    margin-bottom: 8px;
+}
+
 /* ── Progress Bar ── */
 .progress-bar-container {
     width: 100%;
@@ -593,5 +771,10 @@ body {
     .search-box .btn-primary {
         width: 100%;
         justify-content: center;
+    }
+
+    .folder-add-row {
+        flex-direction: column;
+        align-items: stretch;
     }
 }
