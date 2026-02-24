@@ -103,29 +103,35 @@ async def describe_image(image_path: str, file_name: str) -> dict:
     Describe an image in extreme detail using vision model.
     Returns: {"summary": str, "keywords": [str]}
     """
-    prompt = f"""Describe this image in EXTREME DETAIL for search indexing purposes.
+    prompt = f"""Act as a high-fidelity image scanner and deep analysis system for search indexing.
 File name: {file_name}
 
-You must describe EVERYTHING you can see:
-- Objects and items (what they are, their colors, materials, sizes)
-- People (appearance, actions, emotions, clothing, number of people)
-- Scene and setting (indoor/outdoor, location type, time of day, weather)
-- Text visible in the image (signs, labels, watermarks)
-- Colors, lighting, and visual style
-- Background elements
-- Any symbols, logos, or icons
-- The overall mood and atmosphere
-- Type of image (photo, screenshot, diagram, chart, illustration, meme, etc.)
+INSTRUCTIONS: Analyze this image with EXTREME precision. Extract and list EVERYTHING visible, especially background details that are often missed.
 
-Be as detailed and descriptive as possible. Every detail matters for searchability.
-Include related concepts and synonyms. For example, if there is a beach, also mention: ocean, sea, coast, shore, sand, waves, tropical.
+FIELDS TO ANALYZE:
+1. BACKGROUND TEXT & OCR: 
+   - Transcribe ALL visible text, even if small, blurred, or in the background.
+   - Look for text on: blackboards, whiteboards, signs, computer screens, papers, bookshelves, or clothing labels.
+   - If there are mathematical formulas, scientific equations, or code snippets, transcribe them exactly (e.g., E=mc^2, derivatives, integrals).
+2. PEOPLE & ACTIONS: 
+   - Describe specific physical actions (e.g., "person pointing at a board", "student writing in a notebook", "someone laughing while drinking coffee").
+   - Detail their posture, gestures, eye contact, and interactions with objects.
+3. DETAILED OBJECTS:
+   - Identify specific models/types (e.g., "ThinkPad laptop", "potted Monstera plant", "Starbucks cup").
+   - Mention materials (wood, glass, brushed metal) and textures.
+4. SCENE & ENVIRONMENT:
+   - Detail the lighting (natural, neon, cinematic, dim) and shadows.
+   - Describe the depth of field and focus.
+5. TYPES & STYLES: 
+   - Identify if it's a: high-res photo, blurry CCTV frame, digital illustration, handwritten note, screenshot, or scientific diagram.
 
-IMPORTANT: Respond ONLY with a JSON object. All content must be in English.
+CRITICAL:
+- Respond ONLY with a JSON object. All content must be in English.
+- Summary: 2-4 sentences capturing the core context AND the most defining background detail.
+- Keywords: Include 30-60 keywords. MUST include all text/math found in step 1.
 
 FORMAT:
-{{"summary": "Detailed 2-4 sentence description of the image", "keywords": ["keyword1", "keyword2", ...]}}
-
-Include 20-40 keywords covering all aspects of the image."""
+{{"summary": "...", "keywords": ["keyword1", "keyword2", ...]}}"""
 
     try:
         response = await _chat(prompt, image_path=image_path)
@@ -234,23 +240,23 @@ async def expand_query_with_file(user_query: str, file_content: Optional[str] = 
 
     context = "\n\n".join(context_parts)
 
-    prompt = f"""You are an expert search query expansion system. The user wants to find SIMILAR files on their computer.
-They have provided the following context:
-
+    prompt = f"""You are a multi-modal high-fidelity search query expansion system.
+Context provided:
 {context}
 
 INSTRUCTIONS:
-1. Analyze BOTH the user's text description AND the uploaded file content/image.
-2. Generate highly relevant English search keywords that would match SIMILAR files.
-3. Include synonyms, related concepts, broader categories, and domain-specific terms.
-4. For images: extract visual elements, objects, colors, themes, styles, and text within the image.
-5. For documents: extract key topics, main subjects, technical jargon, and named entities.
-6. Think about what metadata or content would exist in files similar to what the user is looking for.
+1. Perform a Deep Visual/Content Audit:
+   - For images: Index ALL background elements, transcribing text on boards/screens and describing specific human actions (gestures, postures, tool usage).
+   - For documents: Extract technical formulas, specific named entities, and deep topical metadata.
+2. Generate space-separated English keywords (35-60 keywords) that represent:
+   - Core visual components (foreground/background).
+   - Transcribed text, math expressions, and branding.
+   - Specific user intent combined with file context.
+   - Professional/domain synonyms and related concepts.
 
 CRITICAL:
-Respond with ONLY a single line of space-separated English keywords (25-45 keywords).
-DO NOT include prefixes like "Here are the keywords:" or "Keywords:".
-DO NOT include any explanation or punctuation. JUST THE WORDS."""
+Respond with ONLY a single line of space-separated English keywords.
+DO NOT include any conversational text, prefixes, or punctuation. JUST THE WORDS."""
 
     try:
         response = await _chat(prompt, image_path=image_path)

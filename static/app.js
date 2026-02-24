@@ -12,6 +12,9 @@ let attachedFile = null;
 document.addEventListener('DOMContentLoaded', () => {
     checkHealth();
 
+    // Initial icon render
+    if (window.lucide) lucide.createIcons();
+
     // Enter key to search
     document.getElementById('search-input').addEventListener('keydown', (e) => {
         if (e.key === 'Enter') doSearch();
@@ -44,17 +47,14 @@ async function checkHealth() {
         const data = await res.json();
         if (data.ollama_running && data.model_available) {
             dot.className = 'status-dot online';
-            text.textContent = 'Ollama OK';
-        } else if (data.ollama_running) {
-            dot.className = 'status-dot offline';
-            text.textContent = 'Model not found';
+            text.textContent = 'Service OK';
         } else {
             dot.className = 'status-dot offline';
-            text.textContent = 'Ollama offline';
+            text.textContent = 'Ollama Error';
         }
     } catch {
         dot.className = 'status-dot offline';
-        text.textContent = 'Server offline';
+        text.textContent = 'Server Offline';
     }
 }
 
@@ -71,19 +71,24 @@ function setAttachedFile(file) {
     const nameEl = document.getElementById('attached-name');
     const iconEl = container.querySelector('.attached-icon');
 
-    // Set icon based on type
+    // Set icon based on type using data-lucide
+    let iconName = 'file';
     if (file.type.startsWith('image/')) {
-        iconEl.textContent = '🖼️';
+        iconName = 'image';
     } else if (file.name.endsWith('.pdf')) {
-        iconEl.textContent = '📕';
-    } else if (file.name.endsWith('.docx')) {
-        iconEl.textContent = '📘';
-    } else {
-        iconEl.textContent = '📄';
+        iconName = 'file-text';
+    } else if (file.name.endsWith('.docx') || file.name.endsWith('.doc')) {
+        iconName = 'file-text';
+    } else if (file.name.endsWith('.xlsx')) {
+        iconName = 'table';
     }
 
+    iconEl.setAttribute('data-lucide', iconName);
     nameEl.textContent = file.name;
-    container.style.display = 'flex';
+    container.style.display = 'inline-flex';
+
+    // Refresh icons
+    if (window.lucide) lucide.createIcons();
 }
 
 function removeAttachment() {
@@ -100,20 +105,20 @@ async function doSearch() {
 
     isSearching = true;
     const btn = document.getElementById('btn-search');
+    const originalBtnText = '搜尋';
     btn.disabled = true;
-    btn.innerHTML = '<span class="spinner"></span>';
+    btn.innerHTML = '<i data-lucide="loader-2" class="animate-spin icon-sm"></i>';
+    if (window.lucide) lucide.createIcons();
 
     const meta = document.getElementById('search-meta');
-    meta.innerHTML = '搜尋中... (LLM 正在分析' + (attachedFile ? '檔案和文字' : '關鍵字') + ')';
+    meta.innerHTML = '正在分析查詢...';
 
     const results = document.getElementById('results');
     results.innerHTML = '';
 
     try {
         let data;
-
         if (attachedFile) {
-            // Multimodal search: file + text
             const formData = new FormData();
             formData.append('file', attachedFile);
             formData.append('q', query);
@@ -123,107 +128,102 @@ async function doSearch() {
                 body: formData,
             });
             data = await res.json();
-
-            if (!res.ok) {
-                throw new Error(data.error || 'Search failed');
-            }
         } else {
-            // Text-only search
             const res = await fetch(`${API}/api/search?q=${encodeURIComponent(query)}`);
             data = await res.json();
         }
 
-        // Show expanded query
         const fileTag = data.uploaded_file
-            ? ` + <span class="attached-tag">📎 ${escapeHtml(data.uploaded_file)}</span>`
+            ? ` + <span class="attached-tag">分析物件: ${escapeHtml(data.uploaded_file)}</span>`
             : '';
-        meta.innerHTML = `找到 <strong>${data.total_results}</strong> 個結果${fileTag} — 
-            展開關鍵字: <span class="expanded-query">${escapeHtml(data.expanded_query)}</span>`;
+        meta.innerHTML = `找到 ${data.total_results} 個相關對象${fileTag} — <span class="expanded-query">${escapeHtml(data.expanded_query)}</span>`;
 
         if (data.results.length === 0) {
             results.innerHTML = `
                 <div class="empty-state">
-                    <div class="empty-icon">🤷</div>
-                    <h2>沒有找到相關檔案</h2>
-                    <p>試試不同的描述方式，或確認資料夾已被索引</p>
+                    <div class="empty-illustration"><i data-lucide="search-x" size="48"></i></div>
+                    <h2>未找到匹配項</h2>
+                    <p>嘗試調整搜尋語句，或確認資料夾已完成索引</p>
                 </div>`;
         } else {
-            results.innerHTML = data.results.map((r, i) => renderResult(r, i, data.expanded_query)).join('');
+            results.innerHTML = data.results.map((r, i) => renderResult(r, i, data.expanded_query, data.original_query)).join('');
         }
+
+        // Final icon refresh after results render
+        if (window.lucide) lucide.createIcons();
+
     } catch (err) {
-        meta.innerHTML = `<span class="text-error">搜尋失敗: ${err.message}</span>`;
+        meta.innerHTML = `<span class="text-error">搜尋異常: ${err.message}</span>`;
     } finally {
         isSearching = false;
         btn.disabled = false;
-        btn.innerHTML = '搜尋';
+        btn.innerHTML = originalBtnText;
+        if (window.lucide) lucide.createIcons();
     }
 }
 
-function renderResult(r, index, query) {
-    const icon = getFileIcon(r.file_type);
+function renderResult(r, index, expandedQuery, originalQuery) {
+    const iconName = getFileIcon(r.file_type);
     const isImage = isImageType(r.file_type);
     const size = formatSize(r.file_size);
     const keywords = (r.keywords || '').split(' ').filter(k => k);
 
-    // Highlight logic
-    const queryTerms = query ? query.toLowerCase().split(/\s+/) : [];
+    // Combine original and expanded query for better highlighting coverage
+    const combinedQuery = (originalQuery || '') + ' ' + (expandedQuery || '');
+    const queryTerms = combinedQuery.toLowerCase().split(/\s+/).filter(t => t.length >= 2);
 
     const highlight = (text) => {
         if (!text) return '';
-        if (!queryTerms.length) return escapeHtml(text);
+        // Sort by length descending to avoid partial matches of longer terms
+        const sortedTerms = [...new Set(queryTerms)]
+            .sort((a, b) => b.length - a.length)
+            .map(t => t.replace(/[.*+?^${}()|[Requested\]\\]/g, '\\$&'));
 
-        let result = escapeHtml(text);
-        queryTerms.forEach(term => {
-            if (term.length < 2) return;
-            const regex = new RegExp(`(${term})`, 'gi');
-            result = result.replace(regex, '<span class="highlight">$1</span>');
-        });
-        return result;
+        if (!sortedTerms.length) return escapeHtml(text);
+
+        const combinedRegex = new RegExp(`(${sortedTerms.join('|')})`, 'gi');
+        const escapedText = escapeHtml(text);
+
+        return escapedText.replace(combinedRegex, '<span class="highlight">$1</span>');
     };
 
+    const highlightedName = highlight(r.file_name);
     const highlightedSummary = highlight(r.summary);
 
-    // Sort keywords: matches first
-    keywords.sort((a, b) => {
-        const aMatch = queryTerms.some(t => a.toLowerCase().includes(t));
-        const bMatch = queryTerms.some(t => b.toLowerCase().includes(t));
-        return bMatch - aMatch;
-    });
-
-    const displayKeywords = keywords.slice(0, 20).map(k => {
+    // Tag rendering
+    const displayTags = keywords.slice(0, 12).map(k => {
         const isMatch = queryTerms.some(t => k.toLowerCase().includes(t));
-        return `<span class="tag ${isMatch ? 'highlight' : ''}">${escapeHtml(k)}</span>`;
+        return `<span class="tag ${isMatch ? 'match' : ''}">${escapeHtml(k)}</span>`;
     }).join('');
-
-    const delay = index * 0.05;
 
     let imagePreview = '';
     if (isImage) {
         imagePreview = `<img class="result-image-preview" 
             src="${API}/api/file/preview?path=${encodeURIComponent(r.file_path)}" 
             alt="${escapeHtml(r.file_name)}"
-            loading="lazy"
-            onerror="this.style.display='none'">`;
+            loading="lazy">`;
     }
 
     return `
-        <div class="result-card" style="animation-delay: ${delay}s" 
-             ondblclick="openFile('${escapeAttr(r.file_path)}')">
+        <div class="result-card" style="animation-delay: ${index * 0.05}s" 
+             onclick="copyPath('${escapeAttr(r.file_path)}')">
             ${imagePreview}
             <div class="result-header">
-                <div class="result-icon">${icon}</div>
+                <div class="result-icon-container">
+                    <i data-lucide="${iconName}" class="icon-md"></i>
+                </div>
                 <div class="result-title">
-                    <h3>${escapeHtml(r.file_name)}</h3>
-                    <div class="result-path" title="${escapeAttr(r.file_path)}">${escapeHtml(r.file_path)}</div>
+                    <h3>${highlightedName}</h3>
+                    <div class="result-path">${escapeHtml(r.file_path)}</div>
                 </div>
             </div>
-            <div class="result-summary">${highlightedSummary || 'No summary available'}</div>
+            <div class="result-summary">${highlightedSummary || '無詳細描述'}</div>
             <div class="result-tags">
-                ${displayKeywords}
+                ${displayTags}
             </div>
-            <div class="result-meta">
-                <span>${r.file_type || 'unknown'}</span>
-                <span>${size}</span>
+            <div class="result-footer">
+                <span>類型: ${r.file_type || '未知'}</span>
+                <span>大小: ${size}</span>
             </div>
         </div>`;
 }
@@ -235,54 +235,39 @@ async function browseFolderPath() {
     const indexBtn = document.getElementById('btn-index');
 
     btn.disabled = true;
-    btn.textContent = '⏳ 開啟中...';
+    btn.textContent = '開啟中...';
 
     try {
         const res = await fetch(`${API}/api/browse`);
         const data = await res.json();
-
         if (data.path) {
             selectedFolderPath = data.path;
             pathDisplay.textContent = data.path;
-            pathDisplay.classList.add('has-path');
+            pathDisplay.style.color = 'var(--text-main)';
             indexBtn.disabled = false;
-        } else {
-            // User cancelled
         }
     } catch (err) {
-        alert('無法開啟資料夾選擇器: ' + err.message);
+        alert('無法開啟選擇器: ' + err.message);
     } finally {
         btn.disabled = false;
-        btn.textContent = '📂 選擇資料夾';
+        btn.textContent = '選擇資料夾';
     }
 }
 
 // ── Indexing ──
 async function startIndex() {
-    if (!selectedFolderPath) return alert('請先選擇資料夾');
-
+    if (!selectedFolderPath) return;
     const btn = document.getElementById('btn-index');
     btn.disabled = true;
-
     try {
         const res = await fetch(`${API}/api/index`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ folder_path: selectedFolderPath }),
         });
-        const data = await res.json();
-
-        if (!res.ok) {
-            alert(data.error || 'Failed to start indexing');
-            btn.disabled = false;
-            return;
-        }
-
-        // Show progress and start polling
         document.getElementById('progress-card').style.display = 'block';
         startPolling();
     } catch (err) {
-        alert('Error: ' + err.message);
         btn.disabled = false;
     }
 }
@@ -296,23 +281,14 @@ async function updateProgress() {
     try {
         const res = await fetch(`${API}/api/index/status`);
         const data = await res.json();
-
-        const pct = data.total_files > 0
-            ? Math.round((data.processed_files / data.total_files) * 100)
-            : 0;
-
+        const pct = data.total_files > 0 ? Math.round((data.processed_files / data.total_files) * 100) : 0;
         document.getElementById('progress-bar').style.width = `${pct}%`;
-        document.getElementById('progress-text').textContent =
-            `${data.processed_files} / ${data.total_files} (${pct}%)`;
+        document.getElementById('progress-text').textContent = `${data.processed_files} / ${data.total_files} (${pct}%)`;
         document.getElementById('progress-file').textContent = data.current_file || '-';
-        document.getElementById('progress-time').textContent =
-            `已耗時: ${data.elapsed_seconds}s`;
-
+        document.getElementById('progress-time').textContent = `耗時: ${data.elapsed_seconds}s`;
         if (data.errors && data.errors.length > 0) {
-            document.getElementById('progress-errors').textContent =
-                `${data.errors.length} 個錯誤`;
+            document.getElementById('progress-errors').textContent = `${data.errors.length} ERR`;
         }
-
         if (!data.is_indexing && data.total_files > 0) {
             clearInterval(pollingInterval);
             pollingInterval = null;
@@ -320,9 +296,7 @@ async function updateProgress() {
             loadStats();
             loadWatchedFolders();
         }
-    } catch {
-        // ignore
-    }
+    } catch { }
 }
 
 // ── Watched Folders ──
@@ -331,44 +305,35 @@ async function loadWatchedFolders() {
     try {
         const res = await fetch(`${API}/api/folders`);
         const data = await res.json();
-
         if (!data.folders || data.folders.length === 0) {
-            container.innerHTML = '<p class="text-muted">尚未新增任何資料夾</p>';
+            container.innerHTML = '<p class="text-muted">尚未新增資料夾</p>';
             return;
         }
-
         container.innerHTML = data.folders.map(f => `
-            <div class="watched-folder-item">
-                <span class="watched-folder-path" title="${escapeAttr(f)}">📁 ${escapeHtml(f)}</span>
-                <button class="btn-remove-folder" onclick="removeFolder('${escapeAttr(f)}')" title="移除此資料夾">
-                    🗑️
+            <div class="watched-item">
+                <span class="watched-name" title="${escapeAttr(f)}">${escapeHtml(f)}</span>
+                <button class="btn-icon-danger" onclick="removeFolder('${escapeAttr(f)}')">
+                    <i data-lucide="trash-2" class="icon-xs"></i>
                 </button>
             </div>
         `).join('');
+        if (window.lucide) lucide.createIcons();
     } catch {
-        container.innerHTML = '<p class="text-error">無法載入資料夾清單</p>';
+        container.innerHTML = '<p class="text-error">載入失敗</p>';
     }
 }
 
 async function removeFolder(path) {
-    if (!confirm(`確定要移除此資料夾的索引嗎？\n\n${path}`)) return;
-
+    if (!confirm(`確定要移除此資料夾的監控與索引嗎？\n${path}`)) return;
     try {
-        const res = await fetch(`${API}/api/folders/remove`, {
+        await fetch(`${API}/api/folders/remove`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ folder_path: path }),
         });
-        const data = await res.json();
-        if (res.ok) {
-            loadWatchedFolders();
-            loadStats();
-        } else {
-            alert(data.error || 'Failed to remove folder');
-        }
-    } catch (err) {
-        alert('Error: ' + err.message);
-    }
+        loadWatchedFolders();
+        loadStats();
+    } catch { }
 }
 
 // ── Stats ──
@@ -377,52 +342,34 @@ async function loadStats() {
     try {
         const res = await fetch(`${API}/api/stats`);
         const data = await res.json();
-
-        if (data.total_files === 0) {
-            container.innerHTML = '<p class="text-muted">尚未索引任何檔案</p>';
-            return;
-        }
-
-        const typeItems = Object.entries(data.by_type)
-            .sort((a, b) => b[1] - a[1])
-            .slice(0, 10)
-            .map(([type, count]) => `
-                <div class="stat-item">
-                    <div class="stat-value">${count}</div>
-                    <div class="stat-label">${type || 'no ext'}</div>
-                </div>`)
-            .join('');
-
-        const esStatus = data.search_engine === 'elasticsearch'
-            ? '<span class="es-badge online">🟢 Elasticsearch</span>'
-            : '<span class="es-badge offline">🟡 SQLite Fallback</span>';
-
+        const esStatus = data.search_engine === 'elasticsearch' ? 'Elasticsearch' : 'SQLite';
         container.innerHTML = `
-            <div class="stats-header">${esStatus}</div>
+            <div style="margin-bottom:12px; font-size:0.75rem; color:var(--text-dim); text-transform:uppercase;">引擎: ${esStatus}</div>
             <div class="stats-grid">
-                <div class="stat-item">
-                    <div class="stat-value">${data.total_files}</div>
-                    <div class="stat-label">總檔案數</div>
+                <div class="stat-box">
+                    <span class="stat-val">${data.total_files}</span>
+                    <span class="stat-lbl">檔案總額</span>
                 </div>
-                ${typeItems}
+                <div class="stat-box">
+                    <span class="stat-val">${Object.keys(data.by_type).length}</span>
+                    <span class="stat-lbl">格式類別</span>
+                </div>
             </div>`;
     } catch {
-        container.innerHTML = '<p class="text-error">無法載入統計</p>';
+        container.innerHTML = '<p class="text-error">無法讀取統計</p>';
     }
 }
 
 async function clearIndex() {
-    if (!confirm('確定要清除所有索引資料嗎？')) return;
+    if (!confirm('確定要清除所有索引嗎？')) return;
     try {
         await fetch(`${API}/api/clear`, { method: 'POST' });
         loadStats();
         loadWatchedFolders();
-    } catch (err) {
-        alert('Error: ' + err.message);
-    }
+    } catch { }
 }
 
-// ── Panel ──
+// ── UI UI UI ──
 function showPanel(name) {
     document.getElementById('panel-overlay').classList.add('active');
     document.getElementById(`panel-${name}`).classList.add('active');
@@ -437,41 +384,32 @@ function hidePanel() {
     document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
 }
 
-// Close panel on Escape
 document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') hidePanel();
 });
 
 // ── Helpers ──
 function getFileIcon(ext) {
-    const icons = {
-        '.pdf': '📕', '.docx': '📘', '.doc': '📘', '.xlsx': '📊', '.xls': '📊',
-        '.pptx': '📙', '.ppt': '📙',
-        '.jpg': '🖼️', '.jpeg': '🖼️', '.png': '🖼️', '.gif': '🖼️', '.webp': '🖼️',
-        '.bmp': '🖼️', '.svg': '🖼️', '.tiff': '🖼️', '.ico': '🖼️',
-        '.py': '🐍', '.js': '📜', '.ts': '📜', '.html': '🌐', '.css': '🎨',
-        '.java': '☕', '.cpp': '⚙️', '.c': '⚙️', '.go': '🔵', '.rs': '🦀',
-        '.txt': '📄', '.md': '📝', '.json': '📋', '.xml': '📋', '.csv': '📊',
-        '.yaml': '📋', '.yml': '📋', '.log': '📃',
-        '.zip': '📦', '.rar': '📦', '.7z': '📦',
-        '.mp3': '🎵', '.wav': '🎵', '.mp4': '🎬', '.avi': '🎬',
+    const map = {
+        '.pdf': 'file-text', '.docx': 'file-text', '.doc': 'file-text',
+        '.xlsx': 'table', '.xls': 'table', '.pptx': 'presentation',
+        '.jpg': 'image', '.jpeg': 'image', '.png': 'image', '.webp': 'image',
+        '.py': 'code', '.js': 'code', '.html': 'code', '.css': 'code',
+        '.txt': 'file-text', '.md': 'file-text', '.json': 'braces',
+        '.zip': 'archive', '.mp3': 'music', '.mp4': 'video'
     };
-    return icons[ext] || '📄';
+    return map[ext] || 'file';
 }
 
 function isImageType(ext) {
-    return ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp', '.tiff', '.ico'].includes(ext);
+    return ['.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp'].includes(ext);
 }
 
 function formatSize(bytes) {
     if (!bytes) return '-';
     const units = ['B', 'KB', 'MB', 'GB'];
-    let i = 0;
-    let size = bytes;
-    while (size >= 1024 && i < units.length - 1) {
-        size /= 1024;
-        i++;
-    }
+    let i = 0, size = bytes;
+    while (size >= 1024 && i < units.length - 1) { size /= 1024; i++; }
     return `${size.toFixed(i > 0 ? 1 : 0)} ${units[i]}`;
 }
 
@@ -486,18 +424,18 @@ function escapeAttr(str) {
     return str.replace(/'/g, "\\'").replace(/\\/g, "\\\\");
 }
 
-function openFile(path) {
+function copyPath(path) {
     navigator.clipboard.writeText(path).then(() => {
         const toast = document.createElement('div');
         toast.style.cssText = `
-            position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
-            background: var(--bg-elevated); color: var(--text-primary);
-            padding: 10px 20px; border-radius: 8px; font-size: 0.85rem;
-            border: 1px solid var(--border); box-shadow: var(--shadow);
-            z-index: 200; animation: fadeInUp 0.3s ease;
+            position: fixed; bottom: 32px; left: 50%; transform: translateX(-50%);
+            background: var(--zinc-800); color: var(--text-main);
+            padding: 8px 16px; border-radius: 8px; font-size: 0.8rem;
+            border: 1px solid var(--border); box-shadow: 0 10px 40px rgba(0,0,0,0.5);
+            z-index: 2000; animation: fadeIn 0.2s ease;
         `;
-        toast.textContent = `📋 路徑已複製: ${path}`;
+        toast.textContent = `路徑已複製`;
         document.body.appendChild(toast);
-        setTimeout(() => toast.remove(), 2500);
+        setTimeout(() => toast.remove(), 2000);
     });
 }

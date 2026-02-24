@@ -5,12 +5,13 @@ import sqlite3
 import os
 import time
 import re
+import socket
 from typing import Optional
 from elasticsearch import Elasticsearch
 
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "file_guessr.db")
 ES_INDEX = "file_guessr"
-ES_URL = os.environ.get("ES_URL", "http://localhost:9200")
+ES_URL = os.environ.get("ES_URL", "http://127.0.0.1:9200")
 
 # ──────────────── Elasticsearch ────────────────
 
@@ -29,6 +30,21 @@ def _get_es() -> Optional[Elasticsearch]:
             urls_to_try.append(ES_URL.replace("http://", "https://"))
 
         for url in urls_to_try:
+            # Fast socket check before trying heavy Elasticsearch client info()
+            try:
+                # Parse host and port
+                from urllib.parse import urlparse
+                parsed = urlparse(url)
+                host = parsed.hostname
+                port = parsed.port or (443 if url.startswith("https") else 80)
+                
+                # Check if port is open with a very short timeout
+                with socket.create_connection((host, port), timeout=0.5):
+                    pass
+            except Exception:
+                # Port is likely closed, skip this URL
+                continue
+
             try:
                 kwargs = {}
                 if url.startswith("https://"):
@@ -40,7 +56,8 @@ def _get_es() -> Optional[Elasticsearch]:
                 if es_password:
                     kwargs["basic_auth"] = ("elastic", es_password)
 
-                client = Elasticsearch(url, **kwargs)
+                # Use short timeout for the check
+                client = Elasticsearch(url, request_timeout=2.0, **kwargs)
                 info = client.info()
                 _es = client
                 version = info.get("version", {}).get("number", "unknown")
@@ -176,8 +193,11 @@ def init_db():
     conn.commit()
     conn.close()
 
-    # Initialize Elasticsearch index
-    _ensure_index()
+    # Initialize Elasticsearch index (defensively)
+    try:
+        _ensure_index()
+    except Exception as e:
+        print(f"[ES] Warning: Error during index ensuring: {e}")
 
 
 # ──────────────── CRUD ────────────────

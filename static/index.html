@@ -8,8 +8,12 @@
     <meta name="description" content="Use natural language to search your local files">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/static/style.css?v=2">
+    <link
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;500;600;700&display=swap"
+        rel="stylesheet">
+    <link rel="stylesheet" href="/static/style.css?v=3">
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
 </head>
 
 <body>
@@ -17,7 +21,7 @@
         <!-- Header -->
         <header class="header">
             <div class="logo">
-                <span class="logo-icon">🔍</span>
+                <i data-lucide="search" class="logo-icon"></i>
                 <h1>File Guessr</h1>
             </div>
             <div class="header-actions">
@@ -25,7 +29,10 @@
                     <span class="status-dot" id="status-dot"></span>
                     <span id="status-text">Checking...</span>
                 </button>
-                <button class="btn btn-ghost" onclick="showPanel('settings')">⚙️ 索引管理</button>
+                <button class="btn btn-ghost" onclick="showPanel('settings')">
+                    <i data-lucide="settings-2" class="icon-sm"></i>
+                    設定
+                </button>
             </div>
         </header>
 
@@ -33,10 +40,9 @@
         <main class="main">
             <div class="search-container">
                 <div class="search-box">
-                    <input type="text" id="search-input" placeholder="用自然語言搜尋你的檔案... 例如：有關沙灘的照片、會議記錄、Python程式碼"
-                        autocomplete="off">
-                    <label class="btn btn-ghost btn-attach" id="btn-attach" title="附加檔案搜尋">
-                        📎
+                    <input type="text" id="search-input" placeholder="搜尋你的檔案..." autocomplete="off">
+                    <label class="btn-attach" id="btn-attach" title="附加檔案搜尋">
+                        <i data-lucide="paperclip"></i>
                         <input type="file" id="search-file-input" style="display:none" onchange="onFileAttached(this)">
                     </label>
                     <button class="btn btn-primary" id="btn-search" onclick="doSearch()">
@@ -46,9 +52,11 @@
 
                 <!-- Attached file preview -->
                 <div class="attached-file" id="attached-file" style="display:none;">
-                    <span class="attached-icon">📄</span>
+                    <i data-lucide="file-text" class="attached-icon"></i>
                     <span class="attached-name" id="attached-name"></span>
-                    <button class="btn-remove-attach" onclick="removeAttachment()" title="移除附件">✕</button>
+                    <button class="btn-remove-attach" onclick="removeAttachment()" title="移除附件">
+                        <i data-lucide="x" class="icon-xs"></i>
+                    </button>
                 </div>
 
                 <div class="search-meta" id="search-meta"></div>
@@ -57,10 +65,14 @@
             <!-- Results -->
             <div class="results" id="results">
                 <div class="empty-state" id="empty-state">
-                    <div class="empty-icon">📂</div>
+                    <div class="empty-illustration">
+                        <i data-lucide="folder-search" size="64"></i>
+                    </div>
                     <h2>開始搜尋你的檔案</h2>
-                    <p>先在「索引管理」中新增資料夾，然後用自然語言搜尋</p>
-                    <p class="text-muted" style="margin-top:8px;font-size:0.8rem">💡 你也可以附加檔案（圖片/文件），讓 AI 找出類似的檔案</p>
+                    <p>在「設定」中新增資料夾後，開始搜尋檔案</p>
+                    <p class="text-muted" style="margin-top:12px;font-size:0.85rem">
+                        你也可以拖放檔案到搜尋框，讓 AI 幫你找相似的內容
+                    </p>
                 </div>
             </div>
         </main>
@@ -69,33 +81,46 @@
         <div class="panel-overlay" id="panel-overlay" onclick="hidePanel()"></div>
         <div class="panel" id="panel-settings">
             <div class="panel-header">
-                <h2>索引管理</h2>
-                <button class="btn btn-ghost" onclick="hidePanel()">✕</button>
+                <div class="title-with-icon">
+                    <i data-lucide="settings" class="icon-md"></i>
+                    <h2>設定</h2>
+                </div>
+                <button class="btn-close" onclick="hidePanel()">
+                    <i data-lucide="x"></i>
+                </button>
             </div>
             <div class="panel-body">
                 <!-- Add New Folder -->
                 <div class="card">
-                    <h3>📁 新增資料夾</h3>
+                    <div class="card-header">
+                        <i data-lucide="folder-plus" class="icon-sm"></i>
+                        <h3>新增資料夾</h3>
+                    </div>
                     <div class="folder-add-row">
-                        <button class="btn btn-primary" id="btn-browse" onclick="browseFolderPath()">
-                            📂 選擇資料夾
+                        <button class="btn btn-outline" id="btn-browse" onclick="browseFolderPath()">
+                            選擇資料夾
                         </button>
-                        <span class="selected-folder-path" id="selected-folder-path">尚未選擇</span>
+                        <div class="selected-folder-container">
+                            <span class="selected-folder-path" id="selected-folder-path">尚未選擇</span>
+                        </div>
                     </div>
                     <button class="btn btn-primary btn-start-index" id="btn-index" onclick="startIndex()" disabled>
-                        🚀 開始索引
+                        開始索引
                     </button>
                 </div>
 
                 <!-- Progress -->
                 <div class="card" id="progress-card" style="display:none;">
-                    <h3>⏳ 索引進度</h3>
+                    <div class="card-header">
+                        <i data-lucide="loader-2" class="icon-sm animate-spin"></i>
+                        <h3>索引進度</h3>
+                    </div>
                     <div class="progress-bar-container">
                         <div class="progress-bar" id="progress-bar"></div>
                     </div>
                     <div class="progress-info">
                         <span id="progress-text">0 / 0</span>
-                        <span id="progress-file">-</span>
+                        <span id="progress-file" class="text-truncate">-</span>
                     </div>
                     <div class="progress-info">
                         <span id="progress-time">已耗時: 0s</span>
@@ -105,27 +130,46 @@
 
                 <!-- Watched Folders -->
                 <div class="card">
-                    <h3>👁️ 已監控資料夾</h3>
-                    <div id="watched-folders-list">
+                    <div class="card-header">
+                        <i data-lucide="monitor" class="icon-sm"></i>
+                        <h3>已監控資料夾</h3>
+                    </div>
+                    <div id="watched-folders-list" class="watched-list">
                         <p class="text-muted">載入中...</p>
                     </div>
                 </div>
 
                 <!-- Stats -->
                 <div class="card">
-                    <h3>📊 索引統計</h3>
+                    <div class="card-header">
+                        <i data-lucide="bar-chart-3" class="icon-sm"></i>
+                        <h3>索引統計</h3>
+                    </div>
                     <div id="stats-content">
                         <p class="text-muted">載入中...</p>
                     </div>
-                    <button class="btn btn-ghost btn-sm" onclick="loadStats()" style="margin-top:12px;">🔄 重新整理</button>
-                    <button class="btn btn-danger btn-sm" onclick="clearIndex()"
-                        style="margin-top:12px; margin-left:8px;">🗑️ 清除索引</button>
+                    <div class="card-actions">
+                        <button class="btn btn-ghost btn-xs" onclick="loadStats()">
+                            <i data-lucide="refresh-cw" class="icon-xs"></i>
+                            重新整理
+                        </button>
+                        <button class="btn btn-danger btn-xs" onclick="clearIndex()">
+                            <i data-lucide="trash-2" class="icon-xs"></i>
+                            清除索引
+                        </button>
+                    </div>
                 </div>
             </div>
         </div>
     </div>
 
-    <script src="/static/app.js?v=2"></script>
+    <script src="/static/app.js?v=3"></script>
+    <script>
+        // Initialize Lucide icons on page load
+        document.addEventListener('DOMContentLoaded', () => {
+            lucide.createIcons();
+        });
+    </script>
 </body>
 
 </html>
