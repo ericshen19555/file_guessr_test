@@ -230,6 +230,30 @@ async def health():
     return await check_ollama_status()
 
 
+@app.get("/api/llm/models")
+async def get_llm_models():
+    """Get all available Ollama models and current selection."""
+    status = await check_ollama_status()
+    return status
+
+
+@app.post("/api/llm/model")
+async def set_llm_model(body: dict):
+    """Update the selected LLM model."""
+    model_name = body.get("model", "").strip()
+    if not model_name:
+        return JSONResponse({"error": "model name is required"}, status_code=400)
+
+    from database import set_setting
+    set_setting("llm_model", model_name)
+
+    # Trigger cache clear in llm.py
+    from llm import _clear_llm_cache
+    _clear_llm_cache()
+
+    return {"message": f"Model updated to: {model_name}"}
+
+
 @app.post("/api/clear")
 async def clear_index():
     """Clear all indexed data."""

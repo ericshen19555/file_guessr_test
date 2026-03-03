@@ -219,6 +219,16 @@ def init_db():
         )
     """)
 
+    # Store generic settings (llm_model, etc.)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS settings (
+            key TEXT PRIMARY KEY,
+            value TEXT
+        )
+    """)
+    # Insert default model if not exists
+    cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('llm_model', 'gemma3:4b')")
+
     conn.commit()
     conn.close()
 
@@ -230,6 +240,26 @@ def init_db():
 
 
 # ──────────────── CRUD ────────────────
+
+def get_setting(key: str, default: str = "") -> str:
+    """Get a setting value from SQLite."""
+    conn = get_connection()
+    row = conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
+    conn.close()
+    return row["value"] if row else default
+
+
+def set_setting(key: str, value: str):
+    """Set a setting value in SQLite."""
+    conn = get_connection()
+    conn.execute("""
+        INSERT INTO settings (key, value)
+        VALUES (?, ?)
+        ON CONFLICT(key) DO UPDATE SET value=excluded.value
+    """, (key, value))
+    conn.commit()
+    conn.close()
+
 
 def upsert_file(file_path: str, file_name: str, file_type: str,
                 file_size: int, modified_time: float,

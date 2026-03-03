@@ -392,6 +392,7 @@ function showPanel(name) {
     if (name === 'settings') {
         loadStats();
         loadWatchedFolders();
+        loadLLMSettings();
     }
 }
 
@@ -430,6 +431,55 @@ function showFileDetails(index) {
 function closeDetailsModal() {
     document.getElementById('details-overlay').classList.remove('active');
     document.getElementById('panel-details').classList.remove('active');
+}
+
+// ── LLM Settings ──
+async function loadLLMSettings() {
+    const select = document.getElementById('select-llm-model');
+    try {
+        const res = await fetch(`${API}/api/llm/models`);
+        const data = await res.json();
+
+        if (data.available_models) {
+            select.innerHTML = data.available_models.map(m =>
+                `<option value="${escapeAttr(m)}" ${m === data.selected_model ? 'selected' : ''}>${escapeHtml(m)}</option>`
+            ).join('');
+
+            if (!data.model_available && data.selected_model) {
+                // Warning if selected model is not in available list
+                const opt = document.createElement('option');
+                opt.value = data.selected_model;
+                opt.selected = true;
+                opt.textContent = `${data.selected_model} (未安裝!)`;
+                opt.style.color = '#ef4444';
+                select.prepend(opt);
+            }
+        }
+    } catch (err) {
+        select.innerHTML = '<option value="">無法載入模型清單</option>';
+    }
+}
+
+async function updateLLMModel() {
+    const select = document.getElementById('select-llm-model');
+    const model = select.value;
+    if (!model) return;
+
+    try {
+        const res = await fetch(`${API}/api/llm/model`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ model: model }),
+        });
+        const data = await res.json();
+        console.log('[LLM] Model updated:', data.message);
+
+        // Show a brief success highlight
+        select.style.borderColor = '#10b981';
+        setTimeout(() => select.style.borderColor = '', 1500);
+    } catch (err) {
+        alert('更新模型失敗: ' + err.message);
+    }
 }
 
 // ── Helpers ──

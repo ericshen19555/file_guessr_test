@@ -9,8 +9,30 @@ import re
 from typing import Optional
 
 OLLAMA_BASE_URL = "http://localhost:11434"
-MODEL_NAME = "gemma3:4b"
 TIMEOUT = 120.0  # seconds - local model can be slow
+
+# Simple cache for the model name to avoid constant DB reads
+_cached_model = None
+_cache_time = 0
+CACHE_TTL = 30 # seconds
+
+def get_model_name() -> str:
+    """Get the current selected model name from database with caching."""
+    global _cached_model, _cache_time
+    import time
+    from database import get_setting
+
+    now = time.time()
+    if _cached_model is None or (now - _cache_time) > CACHE_TTL:
+        _cached_model = get_setting("llm_model", "gemma3:4b")
+        _cache_time = now
+    return _cached_model
+
+
+def _clear_llm_cache():
+    """Clear the cached model name to force a refresh from the database."""
+    global _cached_model
+    _cached_model = None
 
 
 async def _chat(prompt: str, image_path: Optional[str] = None) -> str:
@@ -24,7 +46,7 @@ async def _chat(prompt: str, image_path: Optional[str] = None) -> str:
         messages[0]["images"] = [img_data]
 
     payload = {
-        "model": MODEL_NAME,
+        "model": get_model_name(),
         "messages": messages,
         "stream": False,
         "options": {
@@ -227,21 +249,22 @@ async def check_ollama_status() -> dict:
             resp.raise_for_status()
             models = resp.json().get("models", [])
             model_names = [m["name"] for m in models]
-
-            has_model = any(MODEL_NAME.split(":")[0] in name for name in model_names)
+            
+            current_model = get_model_name()
+            has_model = any(current_model.split(":")[0] in name for name in model_names)
 
             return {
                 "ollama_running": True,
                 "model_available": has_model,
                 "available_models": model_names,
-                "required_model": MODEL_NAME,
+                "selected_model": current_model,
             }
     except Exception as e:
         return {
             "ollama_running": False,
             "model_available": False,
             "error": str(e),
-            "required_model": MODEL_NAME,
+            "selected_model": get_model_name(),
         }
 
 
