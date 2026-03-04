@@ -8,8 +8,8 @@ import json
 import re
 from typing import Optional
 
-OLLAMA_BASE_URL = "http://localhost:11434"
-TIMEOUT = 120.0  # seconds - local model can be slow
+OLLAMA_BASE_URL = "http://127.0.0.1:11434"
+TIMEOUT = 300.0  # seconds - local model can be slow
 
 # Simple cache for the model name to avoid constant DB reads
 _cached_model = None
@@ -66,7 +66,9 @@ async def _chat(prompt: str, image_path: Optional[str] = None) -> str:
                 raise Exception(f"Model '{model}' not found in Ollama. Please download it or select another model.")
             response.raise_for_status()
             data = response.json()
-            return data["message"]["content"]
+            content = data["message"]["content"]
+            print(f"[LLM DEBUG] Raw Output: {content}")
+            return content
         except httpx.ConnectError:
             raise Exception("Cannot connect to Ollama. Is it running?")
         except Exception as e:
@@ -78,31 +80,60 @@ def _parse_json_response(text: str) -> dict:
     # Try to find JSON block in markdown code fence
     json_match = re.search(r'```(?:json)?\s*\n?(.*?)\n?```', text, re.DOTALL)
     if json_match:
-        text = json_match.group(1)
+        text_to_parse = json_match.group(1)
+    else:
+        # Try to find JSON object directly
+        obj_match = re.search(r'\{.*\}', text, re.DOTALL)
+        text_to_parse = obj_match.group(0) if obj_match else None
 
-    # Try to find JSON object directly
-    json_match = re.search(r'\{.*\}', text, re.DOTALL)
-    if json_match:
+    if text_to_parse:
         try:
-            data = json.loads(json_match.group(0))
-            # Ensure keywords are always a list, even if the model returns a string
-            if "keywords" in data and isinstance(data["keywords"], str):
-                # Split by comma, semicolon, or newline
-                data["keywords"] = [k.strip() for k in re.split(r'[;,\n]', data["keywords"]) if k.strip()]
-            return data
+            data = json.loads(text_to_parse)
+            # Create a case-insensitive copy for key lookup
+            data_low = {k.lower(): v for k, v in data.items()}
+            
+            # Find keywords (handle keywords, tags, keyword_list, etc.)
+            raw_keywords = None
+            for key in ["keywords", "tags", "keyword_list", "entities"]:
+                if key in data_low:
+                    raw_keywords = data_low[key]
+                    break
+            
+            if isinstance(raw_keywords, str):
+                keywords = [k.strip() for k in re.split(r'[;,\n]', raw_keywords) if k.strip()]
+            elif isinstance(raw_keywords, list):
+                keywords = [str(k).strip() for k in raw_keywords if k]
+            else:
+                keywords = []
+                
+            # Find summary
+            summary = ""
+            for key in ["summary", "description", "abstract"]:
+                if key in data_low:
+                    summary = str(data_low[key])
+                    break
+            
+            if not summary and not keywords:
+                return {"summary": text.strip(), "keywords": []}
+                
+            return {"summary": summary, "keywords": keywords}
         except json.JSONDecodeError:
             pass
 
     # Fallback: return the whole text as summary, and try to find anything that looks like a list
     keywords = []
-    # Look for bullet points or comma-separated lists if JSON fails
     lines = text.split("\n")
     for line in lines:
         line = line.strip()
+        # Look for bullet points
         if line.startswith(("- ", "* ", "• ")):
             keywords.append(line[2:].strip())
+        # Look for "Keywords: A, B, C"
+        elif ":" in line and any(k in line.lower() for k in ["keywords", "tags"]):
+            parts = line.split(":", 1)[1]
+            keywords.extend([k.strip() for k in re.split(r'[;,\n]', parts) if k.strip()])
     
-    return {"summary": text.strip(), "keywords": keywords}
+    return {"summary": text.strip(), "keywords": list(set(keywords))}
 
 
 async def extract_keywords(text: str, file_name: str) -> dict:

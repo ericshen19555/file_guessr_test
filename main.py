@@ -244,8 +244,8 @@ async def set_llm_model(body: dict):
     if not model_name:
         return JSONResponse({"error": "model name is required"}, status_code=400)
 
-    from database import set_setting
-    set_setting("llm_model", model_name)
+    database.set_setting("llm_model", model_name)
+    print(f"[API] Set LLM model to: {model_name}")
 
     # Trigger cache clear in llm.py
     from llm import _clear_llm_cache
