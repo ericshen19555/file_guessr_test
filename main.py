@@ -294,11 +294,20 @@ async def get_llm_logs():
 
 @app.post("/api/clear")
 async def clear_index():
-    """Clear all indexed data."""
+    """Clear all indexed data and forcefully stop any active indexing."""
     status = get_index_status()
     if status["is_indexing"]:
-        return JSONResponse({"error": "Cannot clear while indexing"}, status_code=409)
+        from indexer import cancel_index
+        cancel_index()
+        # Give it a small moment to break the loop
+        await asyncio.sleep(0.5)
+
     database.clear_db()
+    
+    # Trigger cache clear in llm.py
+    from llm import _clear_llm_cache
+    _clear_llm_cache()
+    
     return {"message": "Index cleared"}
 
 

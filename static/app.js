@@ -609,6 +609,11 @@ async function clearIndex() {
     try {
         const res = await fetch(`${API}/api/clear`, { method: 'POST' });
         const data = await res.json();
+
+        if (!res.ok) {
+            throw new Error(data.error || '清除失敗 (HTTP ' + res.status + ')');
+        }
+
         loadStats();
         loadWatchedFolders();
         // Show success toast

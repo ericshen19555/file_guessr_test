@@ -22,6 +22,7 @@ SKIP_DIRS = {
 # Progress state (global for simplicity)
 indexing_state = {
     "is_indexing": False,
+    "cancel": False,
     "folder": "",
     "total_files": 0,
     "processed_files": 0,
@@ -236,6 +237,10 @@ async def index_folder(folder_path: str):
         # Index files one by one (local LLM = sequential is better)
         ai_logger.info(f"[Indexer] Starting to index {len(files)} files in {folder_path}")
         for i, file_path in enumerate(files):
+            if indexing_state.get("cancel"):
+                ai_logger.info("[Indexer] Indexing cancelled.")
+                break
+                
             indexing_state["current_file"] = os.path.basename(file_path)
             indexing_state["processed_files"] = i
 
@@ -250,6 +255,13 @@ async def index_folder(folder_path: str):
         indexing_state["errors"].append(f"Fatal error: {e}")
     finally:
         indexing_state["is_indexing"] = False
+        indexing_state["cancel"] = False
+
+
+def cancel_index():
+    """Cancel the current indexing process."""
+    if indexing_state["is_indexing"]:
+        indexing_state["cancel"] = True
 
 
 def get_index_status() -> dict:

@@ -205,7 +205,7 @@ INSTRUCTIONS:
 - Respond ONLY with a valid JSON object. No markdown, no code fences, no explanation before or after.
 - All content must be in English
 - If the original content is not in English, translate the key concepts
-- Summary should be 1-3 sentences describing what this file is about
+- Summary should be a detailed 3-5 sentence paragraph comprehensively describing what this file is about
 - Keywords should be comprehensive and EXHAUSTIVE: include ALL topics, names, places, technical terms, actions, concepts, and proper nouns
 - Include 20-40 keywords
 - CRITICAL: Multi-word terms MUST be kept as a single keyword (e.g. "binary search", "machine learning", "New York")
@@ -213,7 +213,7 @@ INSTRUCTIONS:
 - Keep original proper nouns even if they are not in English (e.g. "東京", "台北101")
 
 OUTPUT FORMAT (respond with ONLY this, no additional text):
-{{"summary": "Brief description of the file content", "keywords": ["keyword1", "keyword2", "keyword3"]}}"""
+{{"summary": "Detailed comprehensive description of the file content", "keywords": ["keyword1", "keyword2", "keyword3"]}}"""
 
     try:
         ai_logger.info(f"Extracting keywords for {file_name}...")
@@ -264,7 +264,7 @@ FIELDS TO ANALYZE:
 
 CRITICAL:
 - Respond ONLY with a JSON object. All content must be in English.
-- Summary: 2-4 sentences capturing the core context AND the most defining background detail.
+- Summary: A highly detailed 3-5 sentence paragraph capturing the core context, explicitly listing prominent objects, AND the most defining background details.
 - Keywords: Include 40-70 keywords. MUST include all objects from step 3 and text from step 1.
 - CRITICAL: ANTICIPATE HALLUCINATIONS. DO NOT invent items. ONLY list objects that are explicitly visible in the pixels of the image.
 - CRITICAL: Multi-word terms MUST be kept as a single keyword:
