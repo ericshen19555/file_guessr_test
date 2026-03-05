@@ -47,7 +47,7 @@ class BackgroundLauncher:
         dc.line((45, 45, 58, 58), fill=color_text, width=6)
         return image
 
-    def wait_for_es_http(self, timeout=30):
+    def wait_for_es_http(self, timeout=90):
         """Wait for Elasticsearch HTTP endpoint to be responsive."""
         logging.info(f"Waiting for Elasticsearch HTTP to be ready at localhost:9200 (timeout={timeout}s)...")
         start_time = time.time()

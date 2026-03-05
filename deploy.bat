@@ -101,7 +101,7 @@ set ES_JAVA_HOME=
 echo Applying security fixes to !CONFIG_FILE!...
 copy "!CONFIG_FILE!" "!CONFIG_FILE!.bak" >nul 2>&1
 :: Disable all security and SSL settings
-powershell -Command "$c = gc '!CONFIG_FILE!'; $c = $c -replace 'xpack.security.enabled:.*', 'xpack.security.enabled: false'; $c = $c -replace 'enabled: true', 'enabled: false'; $c | Out-File -Encoding UTF8 '!CONFIG_FILE!'"
+powershell -Command "$c = gc '!CONFIG_FILE!'; $c = $c -replace 'xpack.security.enabled:.*', 'xpack.security.enabled: false'; $c = $c -replace 'enabled: true', 'enabled: false'; [System.IO.File]::WriteAllLines('!CONFIG_FILE!', $c, [System.Text.Encoding]::ASCII)"
 
 if not exist "!ES_HOME!\config\jvm.options.d" mkdir "!ES_HOME!\config\jvm.options.d"
 echo Setting JVM heap size to 2GB...

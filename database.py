@@ -16,59 +16,80 @@ ES_URL = os.environ.get("ES_URL", "http://127.0.0.1:9200")
 # ──────────────── Elasticsearch ────────────────
 
 _es: Optional[Elasticsearch] = None
+_es_last_failed_check: float = 0.0
+_ES_RETRY_INTERVAL = 15  # seconds before retrying after a failed connection
 
 def _get_es() -> Optional[Elasticsearch]:
     """Get a cached Elasticsearch client (lazy init).
     Tries HTTP first, then HTTPS (for ES 8.x which enables security by default).
+    Re-tries connection every _ES_RETRY_INTERVAL seconds after failure so that
+    apps launched via desktop shortcut (before ES is fully ready) will
+    automatically reconnect once the service comes up.
     """
-    global _es
-    if _es is None:
-        # Try configured URL first
-        urls_to_try = [ES_URL]
-        # Also try HTTPS if configured URL is HTTP
-        if ES_URL.startswith("http://"):
-            urls_to_try.append(ES_URL.replace("http://", "https://"))
+    global _es, _es_last_failed_check
 
-        for url in urls_to_try:
-            # Fast socket check before trying heavy Elasticsearch client info()
+    # Already connected
+    if _es is not None:
+        return _es
+
+    # Rate-limit reconnection attempts to avoid hammering ES on every request
+    now = time.time()
+    if _es_last_failed_check > 0 and (now - _es_last_failed_check) < _ES_RETRY_INTERVAL:
+        return None
+
+    # Try configured URL first
+    urls_to_try = [ES_URL]
+    # Also try HTTPS if configured URL is HTTP
+    if ES_URL.startswith("http://"):
+        urls_to_try.append(ES_URL.replace("http://", "https://"))
+
+    for url in urls_to_try:
+        # Fast socket check before trying heavy Elasticsearch client info()
+        try:
+            # Parse host and port
+            from urllib.parse import urlparse
+            parsed = urlparse(url)
+            host = parsed.hostname
+            port = parsed.port or (443 if url.startswith("https") else 80)
+
+            # Check if port is open with a very short timeout
+            with socket.create_connection((host, port), timeout=0.5):
+                pass
+        except Exception:
+            # Port is likely closed, skip this URL
+            continue
+
+        try:
+            kwargs = {}
+            if url.startswith("https://"):
+                kwargs["verify_certs"] = False
+                kwargs["ssl_show_warn"] = False
+
+            # Check for credentials
+            es_password = os.environ.get("ES_PASSWORD", "")
+            if es_password:
+                kwargs["basic_auth"] = ("elastic", es_password)
+
+            # Use short timeout for the check
+            client = Elasticsearch(url, request_timeout=2.0, **kwargs)
+            info = client.info()
+            _es = client
+            _es_last_failed_check = 0.0  # Reset failure timer on success
+            version = info.get("version", {}).get("number", "unknown")
+            print(f"[ES] Connected to Elasticsearch {version} at {url}")
+            # Ensure index exists now that we have a connection
             try:
-                # Parse host and port
-                from urllib.parse import urlparse
-                parsed = urlparse(url)
-                host = parsed.hostname
-                port = parsed.port or (443 if url.startswith("https") else 80)
-                
-                # Check if port is open with a very short timeout
-                with socket.create_connection((host, port), timeout=0.5):
-                    pass
+                _ensure_index()
             except Exception:
-                # Port is likely closed, skip this URL
-                continue
+                pass
+            return _es
+        except Exception as e:
+            print(f"[ES] Cannot connect to {url}: {e}")
 
-            try:
-                kwargs = {}
-                if url.startswith("https://"):
-                    kwargs["verify_certs"] = False
-                    kwargs["ssl_show_warn"] = False
-
-                # Check for credentials
-                es_password = os.environ.get("ES_PASSWORD", "")
-                if es_password:
-                    kwargs["basic_auth"] = ("elastic", es_password)
-
-                # Use short timeout for the check
-                client = Elasticsearch(url, request_timeout=2.0, **kwargs)
-                info = client.info()
-                _es = client
-                version = info.get("version", {}).get("number", "unknown")
-                print(f"[ES] Connected to Elasticsearch {version} at {url}")
-                break
-            except Exception as e:
-                print(f"[ES] Cannot connect to {url}: {e}")
-
-        if _es is None:
-            print("[ES] WARNING: Elasticsearch not available, using SQLite fallback")
-    return _es
+    # All URLs failed — record failure time for retry throttling
+    _es_last_failed_check = time.time()
+    print("[ES] WARNING: Elasticsearch not available, using SQLite fallback")
+    return None
 
 
 def _ensure_index():

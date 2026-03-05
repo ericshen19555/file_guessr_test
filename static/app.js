@@ -376,14 +376,8 @@ async function loadStats() {
     }
 }
 
-async function clearIndex() {
-    if (!confirm('確定要清除所有索引嗎？')) return;
-    try {
-        await fetch(`${API}/api/clear`, { method: 'POST' });
-        loadStats();
-        loadWatchedFolders();
-    } catch { }
-}
+
+
 
 // ── UI UI UI ──
 function showPanel(name) {
@@ -548,38 +542,90 @@ async function showAiLogs() {
     try {
         const res = await fetch(`${API}/api/llm/logs`);
         const data = await res.json();
+        const logContent = data.logs || '（目前沒有日誌記錄）';
 
-        // Show in a simple modal or alert block
-        const logContent = data.logs || 'No logs found.';
+        // Remove any existing overlay
+        const existing = document.getElementById('log-modal-overlay');
+        if (existing) existing.remove();
 
-        // Use a simple custom overlay for logs because logs can be long
-        let overlay = document.getElementById('log-viewer-overlay');
-        if (!overlay) {
-            overlay = document.createElement('div');
-            overlay.id = 'log-viewer-overlay';
-            overlay.className = 'overlay-message log-viewer';
-            overlay.innerHTML = `
-                <div class="overlay-content" style="max-width: 90%; width: 800px; max-height: 80vh;">
-                    <button class="close-btn" onclick="this.parentElement.parentElement.remove()">×</button>
-                    <h2 class="section-title">AI 引擎日誌 (最後 100 條)</h2>
-                    <pre id="log-text-area" style="text-align: left; background: #1a1a1a; color: #a29bfe; padding: 1rem; border-radius: 8px; overflow-y: auto; max-height: 60vh; font-family: monospace; font-size: 0.85rem; border: 1px solid #3d3b6e;"></pre>
-                    <div style="margin-top: 1rem; display: flex; gap: 1rem;">
-                        <button class="btn-primary" onclick="showAiLogs()">重新整理</button>
-                        <button class="btn-ghost" onclick="this.parentElement.parentElement.parentElement.remove()">關閉</button>
+        // Build modal
+        const overlay = document.createElement('div');
+        overlay.id = 'log-modal-overlay';
+        overlay.className = 'log-modal-overlay';
+        overlay.innerHTML = `
+            <div class="log-modal" role="dialog" aria-modal="true">
+                <div class="log-modal-header">
+                    <div class="log-modal-title">
+                        <i data-lucide="terminal" class="icon-sm"></i>
+                        <h3>AI 引擎日誌 <span style="font-weight:400; color:var(--text-dim); font-size:0.8rem;">（最後 100 行）</span></h3>
                     </div>
+                    <button class="btn-close" id="log-close-btn" title="關閉">
+                        <i data-lucide="x"></i>
+                    </button>
                 </div>
-            `;
-            document.body.appendChild(overlay);
-        }
+                <div class="log-modal-body">
+                    <pre class="log-pre" id="log-pre-content"></pre>
+                </div>
+                <div class="log-modal-footer">
+                    <button class="btn btn-ghost btn-xs" id="log-refresh-btn">
+                        <i data-lucide="refresh-cw" class="icon-xs"></i>
+                        重新整理
+                    </button>
+                    <button class="btn btn-ghost" id="log-close-btn-2">關閉</button>
+                </div>
+            </div>`;
 
-        const textArea = document.getElementById('log-text-area');
-        if (textArea) {
-            textArea.textContent = logContent;
-            // Scroll to bottom
-            textArea.scrollTop = textArea.scrollHeight;
-        }
+        document.body.appendChild(overlay);
+        if (window.lucide) lucide.createIcons();
+
+        // Set content & scroll to bottom
+        const pre = document.getElementById('log-pre-content');
+        pre.textContent = logContent;
+        pre.scrollTop = pre.scrollHeight;
+
+        // Event handlers
+        const closeLog = () => overlay.remove();
+        document.getElementById('log-close-btn').addEventListener('click', closeLog);
+        document.getElementById('log-close-btn-2').addEventListener('click', closeLog);
+        document.getElementById('log-refresh-btn').addEventListener('click', async () => {
+            const r2 = await fetch(`${API}/api/llm/logs`);
+            const d2 = await r2.json();
+            pre.textContent = d2.logs || '（沒有日誌記錄）';
+            pre.scrollTop = pre.scrollHeight;
+        });
+        // Click outside to close
+        overlay.addEventListener('click', (e) => { if (e.target === overlay) closeLog(); });
+        // Escape key to close
+        const escHandler = (e) => { if (e.key === 'Escape') { closeLog(); document.removeEventListener('keydown', escHandler); } };
+        document.addEventListener('keydown', escHandler);
 
     } catch (e) {
-        showOverlay(`讀取日誌失敗: ${e.message}`);
+        alert(`讀取日誌失敗: ${e.message}`);
     }
 }
+
+async function clearIndex() {
+    if (!confirm('確定要清除所有索引資料嗎？\n此操作無法復原，需要重新索引所有資料夾。')) return;
+    try {
+        const res = await fetch(`${API}/api/clear`, { method: 'POST' });
+        const data = await res.json();
+        loadStats();
+        loadWatchedFolders();
+        // Show success toast
+        const toast = document.createElement('div');
+        toast.style.cssText = `
+            position: fixed; bottom: 32px; left: 50%; transform: translateX(-50%);
+            background: var(--zinc-800); color: var(--text-main);
+            padding: 10px 18px; border-radius: 8px; font-size: 0.8rem;
+            border: 1px solid var(--border); box-shadow: 0 10px 40px rgba(0,0,0,0.5);
+            z-index: 2000; animation: fadeIn 0.2s ease; display:flex; gap:8px; align-items:center;
+        `;
+        toast.innerHTML = `<i data-lucide="check-circle" style="width:14px;height:14px;color:#10b981"></i> 索引已清除`;
+        document.body.appendChild(toast);
+        if (window.lucide) lucide.createIcons();
+        setTimeout(() => toast.remove(), 2500);
+    } catch (err) {
+        alert('清除失敗: ' + err.message);
+    }
+}
+

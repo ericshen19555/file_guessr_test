@@ -64,8 +64,8 @@ async def _chat(prompt: str, image_path: Optional[str] = None) -> str:
         "messages": messages,
         "stream": False,
         "options": {
-            "temperature": 0.3,  # Low temperature for consistent outputs
-            "num_predict": 1024,
+            "temperature": 0.1,  # Lower temperature for even more consistent JSON outputs
+            # Removed num_predict: 1024 as it causes empty responses in Qwen/Vision models
         }
     }
 
@@ -89,27 +89,38 @@ async def _chat(prompt: str, image_path: Optional[str] = None) -> str:
             raise e
 
 
+def _strip_markdown_fences(text: str) -> str:
+    """Remove markdown code fences like ```json ... ``` that Qwen/other models add."""
+    # Remove ```json ... ``` or ``` ... ``` blocks, keeping only the inner content
+    text = re.sub(r'^```(?:json|JSON)?\s*', '', text.strip())
+    text = re.sub(r'```\s*$', '', text.strip())
+    # Also handle inline fences in the middle
+    text = re.sub(r'```(?:json|JSON)?([\s\S]*?)```', r'\1', text)
+    return text.strip()
+
+
 def _parse_json_response(text: str) -> dict:
-    """Try to extract JSON from LLM response with high resilience."""
+    """Try to extract JSON from LLM response with high resilience.
+    Handles Qwen-style markdown fences, trailing commas, and other quirks.
+    """
     if not text:
         return {"summary": "", "keywords": []}
 
-    # Clean up common garbage at start/end
-    text = text.strip()
-    
-    # 1. Try to find the LARGEST JSON-like structure
-    json_match = re.search(r'\{(?:[^{}]|(?R))*\}', text, re.DOTALL) # Recursion not supported in re, so use simpler
-    # Simpler: find first { and last }
+    # Step 0: Strip markdown code fences (Qwen, Mistral etc. love adding these)
+    text = _strip_markdown_fences(text).strip()
+
+    data = None
+
+    # Step 1: Try first { ... last } extraction
     first_brace = text.find('{')
     last_brace = text.rfind('}')
-    
-    data = None
+
     if first_brace != -1 and last_brace != -1 and last_brace > first_brace:
         json_str = text[first_brace:last_brace+1]
         try:
             data = json.loads(json_str)
         except json.JSONDecodeError:
-            # Try to fix common JSON errors (trailing commas, etc.)
+            # Fix trailing commas, then retry
             json_str_fixed = re.sub(r',\s*([\]}])', r'\1', json_str)
             try:
                 data = json.loads(json_str_fixed)
@@ -117,9 +128,9 @@ def _parse_json_response(text: str) -> dict:
                 pass
 
     if data and isinstance(data, dict):
-        # Create a case-insensitive copy for key lookup
+        # Case-insensitive key lookup
         data_low = {k.lower(): v for k, v in data.items()}
-        
+
         # Keywords extraction
         keywords = []
         for key in ["keywords", "tags", "keyword_list", "entities", "labels"]:
@@ -130,44 +141,52 @@ def _parse_json_response(text: str) -> dict:
                 elif isinstance(val, list):
                     keywords = [str(k).strip() for k in val if k]
                 break
-        
+
         # Summary extraction
         summary = ""
         for key in ["summary", "description", "abstract", "content"]:
             if key in data_low:
                 summary = str(data_low[key]).strip()
                 break
-        
-        # If we have both, we are good
+
         if summary and keywords:
-            return {"summary": summary, "keywords": keywords}
-        
-        # If we have keywords but no summary, use text as fallback or try to find a summary key inside
-        if not summary and keywords:
-            summary = text.strip()
-            # If text is too long (the whole JSON string), try to truncate
-            if len(summary) > 500:
-                summary = summary[:497] + "..."
+            ai_logger.info(f"JSON parsed OK: {len(keywords)} keywords.")
             return {"summary": summary, "keywords": keywords}
 
-    # Fallback: line-by-line parsing
+        if keywords:  # have keywords but no summary
+            summary = text[:500] + "..." if len(text) > 500 else text
+            ai_logger.info(f"JSON partial: {len(keywords)} keywords, no summary.")
+            return {"summary": summary, "keywords": keywords}
+
+    # Step 2: Regex fallback — try to extract keywords array directly
+    # Handles cases like:  "keywords": ["a", "b", "c"]
+    kw_array_match = re.search(
+        r'["\']?keywords["\']?\s*:\s*\[([^\]]+)\]', text, re.IGNORECASE | re.DOTALL
+    )
+    if kw_array_match:
+        raw_items = kw_array_match.group(1)
+        # Extract quoted strings or bare words
+        keywords = re.findall(r'["\']([^"\']+)["\']|([^,\[\]\n"\'\.]+)', raw_items)
+        keywords = [a or b for a, b in keywords]
+        keywords = [k.strip() for k in keywords if k.strip()]
+        if keywords:
+            ai_logger.info(f"Regex array fallback: {len(keywords)} keywords.")
+            return {"summary": "", "keywords": keywords}
+
+    # Step 3: Line-by-line parsing for bullet-point style outputs
     keywords = []
     lines = text.split("\n")
     for line in lines:
         line = line.strip()
-        # Look for bullet points
         if line.startswith(("- ", "* ", "• ")) and len(line) > 2:
             keywords.append(line[2:].strip())
-        # Look for "Keywords: A, B, C"
         elif ":" in line and any(k in line.lower() for k in ["keywords", "tags", "labels"]):
             parts = line.split(":", 1)[1]
             keywords.extend([k.strip() for k in re.split(r'[;,\n]', parts) if k.strip()])
-    
-    # Final fallback: use the whole text as summary
-    # Cleanup text for summary (remove markdown tags)
+
     clean_text = re.sub(r'```.*?```', '', text, flags=re.DOTALL).strip()
     result = {"summary": clean_text if clean_text else text.strip(), "keywords": list(set(keywords))}
-    ai_logger.info(f"Parsed JSON/Fallback: {len(result['keywords'])} keywords found.")
+    ai_logger.info(f"Fallback parse: {len(result['keywords'])} keywords found.")
     return result
 
 
@@ -183,27 +202,17 @@ CONTENT:
 {text[:3000]}
 
 INSTRUCTIONS:
-- Respond ONLY with a JSON object, no other text
+- Respond ONLY with a valid JSON object. No markdown, no code fences, no explanation before or after.
 - All content must be in English
 - If the original content is not in English, translate the key concepts
 - Summary should be 1-3 sentences describing what this file is about
 - Keywords should be comprehensive and EXHAUSTIVE: include ALL topics, names, places, technical terms, actions, concepts, and proper nouns
 - Include 20-40 keywords
-- CRITICAL: Multi-word terms MUST be kept as a single keyword. Examples:
-  - "binary search" NOT "binary", "search"
-  - "machine learning" NOT "machine", "learning"
-  - "dynamic programming" NOT "dynamic", "programming"
-  - "New York" NOT "New", "York"
-  - "Google Cloud Platform" NOT "Google", "Cloud", "Platform"
-- CRITICAL: Extract ALL proper nouns as complete keywords:
-  - Person names (e.g. "Albert Einstein", "Elon Musk")
-  - Place names (e.g. "San Francisco", "Mount Fuji")
-  - Brand/product names (e.g. "Visual Studio Code", "TensorFlow")
-  - Organization names (e.g. "World Health Organization", "MIT")
-  - Technology names (e.g. "React Native", "Node.js")
+- CRITICAL: Multi-word terms MUST be kept as a single keyword (e.g. "binary search", "machine learning", "New York")
+- CRITICAL: Extract ALL proper nouns as complete keywords (person names, place names, brand names, org names, tech names)
 - Keep original proper nouns even if they are not in English (e.g. "東京", "台北101")
 
-FORMAT:
+OUTPUT FORMAT (respond with ONLY this, no additional text):
 {{"summary": "Brief description of the file content", "keywords": ["keyword1", "keyword2", "keyword3"]}}"""
 
     try:

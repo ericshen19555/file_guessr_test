@@ -7,6 +7,8 @@ import sys
 import asyncio
 import subprocess
 import tempfile
+import threading
+import time
 from contextlib import asynccontextmanager
 from typing import Optional
 
@@ -31,6 +33,26 @@ async def lifespan(app: FastAPI):
     # Start file watcher
     from watcher import watcher
     watcher.start()
+
+    # Background thread: keep retrying ES connection until it succeeds.
+    # This handles the common case where ES takes > 60s to start (Windows service
+    # slow startup) and uvicorn was already launched before ES was ready.
+    def _es_reconnect_worker():
+        attempt = 0
+        while True:
+            es = database._get_es()
+            if es is not None:
+                print(f"[ES] Background reconnect: connected after {attempt} retries.")
+                # Also try to ensure the index exists now
+                try:
+                    database._ensure_index()
+                except Exception:
+                    pass
+                return
+            attempt += 1
+            time.sleep(20)
+
+    threading.Thread(target=_es_reconnect_worker, daemon=True, name="es-reconnect").start()
 
     yield
 

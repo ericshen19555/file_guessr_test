@@ -11,7 +11,7 @@
     <link
         href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;500;600;700&display=swap"
         rel="stylesheet">
-    <link rel="stylesheet" href="/static/style.css?v=10">
+    <link rel="stylesheet" href="/static/style.css?v=11">
     <!-- Lucide Icons -->
     <script src="https://unpkg.com/lucide@latest"></script>
 </head>
@@ -175,17 +175,26 @@
                     </div>
                 </div>
 
-                <div class="settings-group">
-                    <label>診斷工具</label>
-                    <button class="btn-ghost" onclick="showAiLogs()" style="width: 100%; justify-content: flex-start;">
-                        <i data-lucide="file-text" class="icon-sm"></i>
-                        查看 AI 引擎日誌
-                    </button>
-                    <button class="btn-ghost" onclick="clearIndex()"
-                        style="width: 100%; justify-content: flex-start; color: var(--color-danger);">
-                        <i data-lucide="trash-2" class="icon-sm"></i>
-                        清除索引資料
-                    </button>
+                <!-- Diagnostics -->
+                <div class="card">
+                    <div class="card-header">
+                        <i data-lucide="shield-alert" class="icon-sm"></i>
+                        <h3>診斷工具</h3>
+                    </div>
+                    <div class="diag-btn-group">
+                        <button class="btn btn-ghost diag-btn" onclick="showAiLogs()">
+                            <i data-lucide="file-text" class="icon-sm"></i>
+                            查看 AI 引擎日誌
+                        </button>
+                        <div class="diag-divider"></div>
+                        <button class="btn btn-ghost diag-btn diag-btn-danger" onclick="clearIndex()">
+                            <i data-lucide="trash-2" class="icon-sm"></i>
+                            清除所有索引資料
+                        </button>
+                    </div>
+                    <p class="text-muted" style="font-size:0.75rem; margin-top:10px;">
+                        清除後需重新索引所有資料夾
+                    </p>
                 </div>
             </div>
         </div>
@@ -219,7 +228,7 @@
         </div>
     </div>
 
-    <script src="/static/app.js?v=10"></script>
+    <script src="/static/app.js?v=11"></script>
     <script>
         // Initialize Lucide icons on page load
         document.addEventListener('DOMContentLoaded', () => {
