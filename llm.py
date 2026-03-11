@@ -6,15 +6,51 @@ import httpx
 import base64
 import json
 import re
+import logging
+import os
 from typing import Optional
 
-OLLAMA_BASE_URL = "http://localhost:11434"
-MODEL_NAME = "gemma3:4b"
-TIMEOUT = 120.0  # seconds - local model can be slow
+# Setup AI Logger
+ai_log_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ai.log")
+ai_logger = logging.getLogger("ai_engine")
+ai_logger.setLevel(logging.INFO)
+# Clear existing handlers
+if ai_logger.handlers:
+    ai_logger.handlers.clear()
+handler = logging.FileHandler(ai_log_file, encoding='utf-8')
+handler.setFormatter(logging.Formatter('%(asctime)s [%(levelname)s] %(message)s'))
+ai_logger.addHandler(handler)
+
+OLLAMA_BASE_URL = "http://127.0.0.1:11434"
+TIMEOUT = 300.0  # seconds - local model can be slow
+
+# Simple cache for the model name to avoid constant DB reads
+_cached_model = None
+_cache_time = 0
+CACHE_TTL = 30 # seconds
+
+def get_model_name() -> str:
+    """Get the current selected model name from database with caching."""
+    global _cached_model, _cache_time
+    import time
+    from database import get_setting
+
+    now = time.time()
+    if _cached_model is None or (now - _cache_time) > CACHE_TTL:
+        _cached_model = get_setting("llm_model", "gemma3:4b")
+        _cache_time = now
+    return _cached_model
+
+
+def _clear_llm_cache():
+    """Clear the cached model name to force a refresh from the database."""
+    global _cached_model
+    _cached_model = None
 
 
 async def _chat(prompt: str, image_path: Optional[str] = None) -> str:
     """Send a chat request to Ollama."""
+    model = get_model_name().strip() # Ensure no newlines/spaces
     messages = [{"role": "user", "content": prompt}]
 
     # If image, encode as base64 and attach
@@ -24,42 +60,134 @@ async def _chat(prompt: str, image_path: Optional[str] = None) -> str:
         messages[0]["images"] = [img_data]
 
     payload = {
-        "model": MODEL_NAME,
+        "model": model,
         "messages": messages,
         "stream": False,
         "options": {
-            "temperature": 0.3,  # Low temperature for consistent outputs
-            "num_predict": 1024,
+            "temperature": 0.1,  # Lower temperature for even more consistent JSON outputs
+            # Removed num_predict: 1024 as it causes empty responses in Qwen/Vision models
         }
     }
 
     async with httpx.AsyncClient(timeout=TIMEOUT) as client:
-        response = await client.post(
-            f"{OLLAMA_BASE_URL}/api/chat",
-            json=payload,
-        )
-        response.raise_for_status()
-        data = response.json()
-        return data["message"]["content"]
+        try:
+            response = await client.post(
+                f"{OLLAMA_BASE_URL}/api/chat",
+                json=payload,
+            )
+            if response.status_code == 404:
+                raise Exception(f"Model '{model}' not found in Ollama. Please download it or select another model.")
+            response.raise_for_status()
+            data = response.json()
+            content = data["message"]["content"]
+            ai_logger.info(f"Model '{model}' responded. Content length: {len(content)}")
+            ai_logger.debug(f"Raw Output: {content}")
+            return content
+        except httpx.ConnectError:
+            raise Exception("Cannot connect to Ollama. Is it running?")
+        except Exception as e:
+            raise e
+
+
+def _strip_markdown_fences(text: str) -> str:
+    """Remove markdown code fences like ```json ... ``` that Qwen/other models add."""
+    # Remove ```json ... ``` or ``` ... ``` blocks, keeping only the inner content
+    text = re.sub(r'^```(?:json|JSON)?\s*', '', text.strip())
+    text = re.sub(r'```\s*$', '', text.strip())
+    # Also handle inline fences in the middle
+    text = re.sub(r'```(?:json|JSON)?([\s\S]*?)```', r'\1', text)
+    return text.strip()
 
 
 def _parse_json_response(text: str) -> dict:
-    """Try to extract JSON from LLM response."""
-    # Try to find JSON block in markdown code fence
-    json_match = re.search(r'```(?:json)?\s*\n?(.*?)\n?```', text, re.DOTALL)
-    if json_match:
-        text = json_match.group(1)
+    """Try to extract JSON from LLM response with high resilience.
+    Handles Qwen-style markdown fences, trailing commas, and other quirks.
+    """
+    if not text:
+        return {"summary": "", "keywords": []}
 
-    # Try to find JSON object directly
-    json_match = re.search(r'\{.*\}', text, re.DOTALL)
-    if json_match:
+    # Step 0: Strip markdown code fences (Qwen, Mistral etc. love adding these)
+    text = _strip_markdown_fences(text).strip()
+
+    data = None
+
+    # Step 1: Try first { ... last } extraction
+    first_brace = text.find('{')
+    last_brace = text.rfind('}')
+
+    if first_brace != -1 and last_brace != -1 and last_brace > first_brace:
+        json_str = text[first_brace:last_brace+1]
         try:
-            return json.loads(json_match.group(0))
+            data = json.loads(json_str)
         except json.JSONDecodeError:
-            pass
+            # Fix trailing commas, then retry
+            json_str_fixed = re.sub(r',\s*([\]}])', r'\1', json_str)
+            try:
+                data = json.loads(json_str_fixed)
+            except json.JSONDecodeError:
+                pass
 
-    # Fallback: return the whole text as summary
-    return {"summary": text.strip(), "keywords": []}
+    if data and isinstance(data, dict):
+        # Case-insensitive key lookup
+        data_low = {k.lower(): v for k, v in data.items()}
+
+        # Keywords extraction
+        keywords = []
+        for key in ["keywords", "tags", "keyword_list", "entities", "labels"]:
+            if key in data_low:
+                val = data_low[key]
+                if isinstance(val, str):
+                    keywords = [k.strip() for k in re.split(r'[;,\n]', val) if k.strip()]
+                elif isinstance(val, list):
+                    keywords = [str(k).strip() for k in val if k]
+                break
+
+        # Summary extraction
+        summary = ""
+        for key in ["summary", "description", "abstract", "content"]:
+            if key in data_low:
+                summary = str(data_low[key]).strip()
+                break
+
+        if summary and keywords:
+            ai_logger.info(f"JSON parsed OK: {len(keywords)} keywords.")
+            return {"summary": summary, "keywords": keywords}
+
+        if keywords:  # have keywords but no summary
+            summary = text[:500] + "..." if len(text) > 500 else text
+            ai_logger.info(f"JSON partial: {len(keywords)} keywords, no summary.")
+            return {"summary": summary, "keywords": keywords}
+
+    # Step 2: Regex fallback — try to extract keywords array directly
+    # Handles cases like:  "keywords": ["a", "b", "c"]
+    kw_array_match = re.search(
+        r'["\']?keywords["\']?\s*:\s*\[([^\]]+)\]', text, re.IGNORECASE | re.DOTALL
+    )
+    if kw_array_match:
+        raw_items = kw_array_match.group(1)
+        # Extract quoted strings or bare words
+        keywords = re.findall(r'["\']([^"\']+)["\']|([^,\[\]\n"\'\.]+)', raw_items)
+        keywords = [a or b for a, b in keywords]
+        keywords = [k.strip() for k in keywords if k.strip()]
+        if keywords:
+            ai_logger.info(f"Regex array fallback: {len(keywords)} keywords.")
+            return {"summary": "", "keywords": keywords}
+
+    # Step 3: Line-by-line parsing for bullet-point style outputs
+    keywords = []
+    lines = text.split("\n")
+    for line in lines:
+        line = line.strip()
+        if line.startswith(("- ", "* ", "• ")) and len(line) > 2:
+            keywords.append(line[2:].strip())
+        elif ":" in line and any(k in line.lower() for k in ["keywords", "tags", "labels"]):
+            parts = line.split(":", 1)[1]
+            keywords.extend([k.strip() for k in re.split(r'[;,\n]', parts) if k.strip()])
+
+    clean_text = re.sub(r'```.*?```', '', text, flags=re.DOTALL).strip()
+    result = {"summary": clean_text if clean_text else text.strip(), "keywords": list(set(keywords))}
+    ai_logger.info(f"Fallback parse: {len(result['keywords'])} keywords found.")
+    return result
 
 
 async def extract_keywords(text: str, file_name: str) -> dict:
@@ -74,17 +202,21 @@ CONTENT:
 {text[:3000]}
 
 INSTRUCTIONS:
-- Respond ONLY with a JSON object, no other text
+- Respond ONLY with a valid JSON object. No markdown, no code fences, no explanation before or after.
 - All content must be in English
 - If the original content is not in English, translate the key concepts
-- Summary should be 1-3 sentences describing what this file is about
-- Keywords should be comprehensive: include topics, names, places, technical terms, actions, and concepts
-- Include 15-30 keywords
+- Summary should be a detailed 3-5 sentence paragraph comprehensively describing what this file is about
+- Keywords should be comprehensive and EXHAUSTIVE: include ALL topics, names, places, technical terms, actions, concepts, and proper nouns
+- Include 20-40 keywords
+- CRITICAL: Multi-word terms MUST be kept as a single keyword (e.g. "binary search", "machine learning", "New York")
+- CRITICAL: Extract ALL proper nouns as complete keywords (person names, place names, brand names, org names, tech names)
+- Keep original proper nouns even if they are not in English (e.g. "東京", "台北101")
 
-FORMAT:
-{{"summary": "Brief description of the file content", "keywords": ["keyword1", "keyword2", "keyword3"]}}"""
+OUTPUT FORMAT (respond with ONLY this, no additional text):
+{{"summary": "Detailed comprehensive description of the file content", "keywords": ["keyword1", "keyword2", "keyword3"]}}"""
 
     try:
+        ai_logger.info(f"Extracting keywords for {file_name}...")
         response = await _chat(prompt)
         result = _parse_json_response(response)
         # Ensure required fields
@@ -111,24 +243,33 @@ INSTRUCTIONS: Analyze this image with EXTREME precision. Extract and list EVERYT
 FIELDS TO ANALYZE:
 1. BACKGROUND TEXT & OCR: 
    - Transcribe ALL visible text, even if small, blurred, or in the background.
-   - Look for text on: blackboards, whiteboards, signs, computer screens, papers, bookshelves, or clothing labels.
-   - If there are mathematical formulas, scientific equations, or code snippets, transcribe them exactly (e.g., E=mc^2, derivatives, integrals).
+   - Look for text on any surface in the image (ONLY IF ACTUALLY PRESENT).
+   - If there are mathematical formulas, scientific equations, or code snippets, transcribe them exactly.
 2. PEOPLE & ACTIONS: 
-   - Describe specific physical actions (e.g., "person pointing at a board", "student writing in a notebook", "someone laughing while drinking coffee").
-   - Detail their posture, gestures, eye contact, and interactions with objects.
-3. DETAILED OBJECTS:
-   - Identify specific models/types (e.g., "ThinkPad laptop", "potted Monstera plant", "Starbucks cup").
-   - Mention materials (wood, glass, brushed metal) and textures.
+   - Describe specific physical actions ONLY IF PEOPLE ARE PRESENT.
+   - Detail their posture, gestures, eye contact.
+3. VISIBLE OBJECTS & ITEMS (CRITICAL - EXHAUSTIVE LIST):
+   - List EVERY SINGLE concrete physical object you see in the image.
+   - Categorize mentally: Food, Drink, Furniture, Decor, Electronics, Tools, Vehicles, Nature.
+   - Mention specific models, types, materials, and colors when possible.
 4. SCENE & ENVIRONMENT:
    - Detail the lighting (natural, neon, cinematic, dim) and shadows.
    - Describe the depth of field and focus.
-5. TYPES & STYLES: 
-   - Identify if it's a: high-res photo, blurry CCTV frame, digital illustration, handwritten note, screenshot, or scientific diagram.
+5. PROPER NOUNS (CRITICAL - extract ALL of these as complete keywords):
+   - PLACE NAMES: cities, countries, landmarks, buildings
+   - BRAND NAMES: logos, product names, company names
+   - PERSON NAMES: if identifiable from context (name tags, credits, watermarks)
+   - ORGANIZATION NAMES: schools, companies, government agencies visible in the image
+   - Keep proper nouns in their ORIGINAL language too (e.g., "東京タワー", "台北101")
 
 CRITICAL:
 - Respond ONLY with a JSON object. All content must be in English.
-- Summary: 2-4 sentences capturing the core context AND the most defining background detail.
-- Keywords: Include 30-60 keywords. MUST include all text/math found in step 1.
+- Summary: A highly detailed 3-5 sentence paragraph capturing the core context, explicitly listing prominent objects, AND the most defining background details.
+- Keywords: Include 40-70 keywords. MUST include all objects from step 3 and text from step 1.
+- CRITICAL: ANTICIPATE HALLUCINATIONS. DO NOT invent items. ONLY list objects that are explicitly visible in the pixels of the image.
+- CRITICAL: Multi-word terms MUST be kept as a single keyword:
+  - "Eiffel Tower" NOT "Eiffel", "Tower"
+  - "machine learning" NOT "machine", "learning"
 
 FORMAT:
 {{"summary": "...", "keywords": ["keyword1", "keyword2", ...]}}"""
@@ -204,22 +345,25 @@ async def check_ollama_status() -> dict:
             resp = await client.get(f"{OLLAMA_BASE_URL}/api/tags")
             resp.raise_for_status()
             models = resp.json().get("models", [])
-            model_names = [m["name"] for m in models]
-
-            has_model = any(MODEL_NAME.split(":")[0] in name for name in model_names)
+            model_names = [m["name"].strip() for m in models]
+            
+            current_model = get_model_name().strip()
+            # Loose match: check if the selected model name (before version) is in the available models
+            model_base = current_model.split(":")[0]
+            has_model = any(model_base in name or current_model in name for name in model_names)
 
             return {
                 "ollama_running": True,
                 "model_available": has_model,
                 "available_models": model_names,
-                "required_model": MODEL_NAME,
+                "selected_model": current_model,
             }
     except Exception as e:
         return {
             "ollama_running": False,
             "model_available": False,
             "error": str(e),
-            "required_model": MODEL_NAME,
+            "selected_model": get_model_name(),
         }
 
 

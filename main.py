@@ -7,6 +7,8 @@ import sys
 import asyncio
 import subprocess
 import tempfile
+import threading
+import time
 from contextlib import asynccontextmanager
 from typing import Optional
 
@@ -31,6 +33,26 @@ async def lifespan(app: FastAPI):
     # Start file watcher
     from watcher import watcher
     watcher.start()
+
+    # Background thread: keep retrying ES connection until it succeeds.
+    # This handles the common case where ES takes > 60s to start (Windows service
+    # slow startup) and uvicorn was already launched before ES was ready.
+    def _es_reconnect_worker():
+        attempt = 0
+        while True:
+            es = database._get_es()
+            if es is not None:
+                print(f"[ES] Background reconnect: connected after {attempt} retries.")
+                # Also try to ensure the index exists now
+                try:
+                    database._ensure_index()
+                except Exception:
+                    pass
+                return
+            attempt += 1
+            time.sleep(20)
+
+    threading.Thread(target=_es_reconnect_worker, daemon=True, name="es-reconnect").start()
 
     yield
 
@@ -121,8 +143,9 @@ async def indexing_status():
 
 
 @app.get("/api/search")
-async def search(q: str = Query(..., min_length=1)):
-    """Search files with natural language query."""
+async def search(q: str = Query("")):
+    """Search files with natural language query. Empty query returns all files."""
+    q = q.strip()
     result = await search_files(q)
     return result
 
@@ -229,13 +252,62 @@ async def health():
     return await check_ollama_status()
 
 
+@app.get("/api/llm/models")
+async def get_llm_models():
+    """Get all available Ollama models and current selection."""
+    status = await check_ollama_status()
+    return status
+
+
+@app.post("/api/llm/model")
+async def set_llm_model(body: dict):
+    """Update the selected LLM model."""
+    model_name = body.get("model", "").strip()
+    if not model_name:
+        return JSONResponse({"error": "model name is required"}, status_code=400)
+
+    database.set_setting("llm_model", model_name)
+    print(f"[API] Set LLM model to: {model_name}")
+
+    # Trigger cache clear in llm.py
+    from llm import _clear_llm_cache
+    _clear_llm_cache()
+
+    return {"message": f"Model updated to: {model_name}"}
+
+
+@app.get("/api/llm/logs")
+async def get_llm_logs():
+    """Get the last N lines of the AI engine log."""
+    from llm import ai_log_file
+    if not os.path.exists(ai_log_file):
+        return {"logs": "Log file not found."}
+    
+    try:
+        with open(ai_log_file, "r", encoding="utf-8") as f:
+            # Get last 100 lines
+            lines = f.readlines()
+            return {"logs": "".join(lines[-100:])}
+    except Exception as e:
+        return {"logs": f"Error reading logs: {e}"}
+
+
 @app.post("/api/clear")
 async def clear_index():
-    """Clear all indexed data."""
+    """Clear all indexed data and forcefully stop any active indexing."""
     status = get_index_status()
     if status["is_indexing"]:
-        return JSONResponse({"error": "Cannot clear while indexing"}, status_code=409)
+        from indexer import cancel_index
+        cancel_index()
+        # Give it a small moment to break the loop
+        await asyncio.sleep(0.5)
+
     database.clear_db()
+    
+    # Trigger cache clear in llm.py
+    from llm import _clear_llm_cache
+    _clear_llm_cache()
+    
     return {"message": "Index cleared"}
 
 

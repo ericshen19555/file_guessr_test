@@ -13,12 +13,16 @@ async def search_files(query: str, limit: int = 20) -> dict:
     3. Return ranked results
     """
     try:
-        # Step 1: Expand query
-        expanded_query = await expand_query(query)
-        print(f"[Search] Original: '{query}' → Expanded: '{expanded_query}'")
-
-        # Step 2: Elasticsearch search
-        results = db_search(expanded_query, limit=limit)
+        if not query:
+            print("[Search] Empty query, returning all files")
+            expanded_query = ""
+            results = db_search(expanded_query, limit=limit)
+        else:
+            # Step 1: Expand query
+            expanded_query = await expand_query(query)
+            print(f"[Search] Original: '{query}' → Expanded: '{expanded_query}'")
+            # Step 2: Elasticsearch search
+            results = db_search(expanded_query, limit=limit)
 
         # Step 3: Format results
         return {

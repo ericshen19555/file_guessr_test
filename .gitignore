@@ -12,10 +12,13 @@ env/
 file_guessr.db
 *.sqlite3
 *.db
+file_guessr.db-wal
+file_guessr.db-shm
 
 # OS generated files
 .DS_Store
 Thumbs.db
+desktop.ini
 
 # IDEs
 .vscode/
@@ -23,8 +26,23 @@ Thumbs.db
 
 # Logs
 *.log
+launcher.log
 
-
-#debug 
-run_diagnose.bat
+# Debug & Temporary scripts
+debug_bg.py
+SUCCESS.txt
+DIR_WORKS.txt
+diagnose.py
+diagnose_stale.py
 debug_run.bat
+run_diagnose.bat
+
+# Scraped Data
+news_data/
+wiki_data/
+Advanced_Robotics_AI/
+
+# Build & Scripts (Upstream)
+run.bat
+fix_environment.bat
+*.tmp

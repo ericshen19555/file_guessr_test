@@ -11,7 +11,7 @@
     <link
         href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;500;600;700&display=swap"
         rel="stylesheet">
-    <link rel="stylesheet" href="/static/style.css?v=3">
+    <link rel="stylesheet" href="/static/style.css?v=11">
     <!-- Lucide Icons -->
     <script src="https://unpkg.com/lucide@latest"></script>
 </head>
@@ -22,7 +22,7 @@
         <header class="header">
             <div class="logo">
                 <i data-lucide="search" class="logo-icon"></i>
-                <h1>File Guessr</h1>
+                <h1>File Guessr<small style="font-size: 0.6rem; opacity: 0.5; margin-left: 4px;">v1.1</small></h1>
             </div>
             <div class="header-actions">
                 <button id="btn-status" class="btn btn-ghost" onclick="checkHealth()">
@@ -128,6 +128,25 @@
                     </div>
                 </div>
 
+                <!-- LLM Model Selection -->
+                <div class="card">
+                    <div class="card-header">
+                        <i data-lucide="cpu" class="icon-sm"></i>
+                        <h3>AI 模型設定</h3>
+                    </div>
+                    <div class="folder-add-row">
+                        <div style="font-size: 0.75rem; color: var(--text-dim); margin-bottom: 4px;">選擇 Ollama 模型</div>
+                        <select id="select-llm-model" class="btn btn-outline"
+                            style="width: 100%; text-align: left; justify-content: flex-start;"
+                            onchange="updateLLMModel()">
+                            <option value="">載入中...</option>
+                        </select>
+                    </div>
+                    <p class="text-muted" style="font-size: 0.75rem; margin-top: 8px;">
+                        這將影響關鍵字抽取、圖片描述與搜尋擴展所使用的模型。
+                    </p>
+                </div>
+
                 <!-- Watched Folders -->
                 <div class="card">
                     <div class="card-header">
@@ -153,17 +172,63 @@
                             <i data-lucide="refresh-cw" class="icon-xs"></i>
                             重新整理
                         </button>
-                        <button class="btn btn-danger btn-xs" onclick="clearIndex()">
-                            <i data-lucide="trash-2" class="icon-xs"></i>
-                            清除索引
+                    </div>
+                </div>
+
+                <!-- Diagnostics -->
+                <div class="card">
+                    <div class="card-header">
+                        <i data-lucide="shield-alert" class="icon-sm"></i>
+                        <h3>診斷工具</h3>
+                    </div>
+                    <div class="diag-btn-group">
+                        <button class="btn btn-ghost diag-btn" onclick="showAiLogs()">
+                            <i data-lucide="file-text" class="icon-sm"></i>
+                            查看 AI 引擎日誌
+                        </button>
+                        <div class="diag-divider"></div>
+                        <button class="btn btn-ghost diag-btn diag-btn-danger" onclick="clearIndex()">
+                            <i data-lucide="trash-2" class="icon-sm"></i>
+                            清除所有索引資料
                         </button>
                     </div>
+                    <p class="text-muted" style="font-size:0.75rem; margin-top:10px;">
+                        清除後需重新索引所有資料夾
+                    </p>
+                </div>
+            </div>
+        </div>
+
+        <!-- File Details Modal -->
+        <div class="panel-overlay" id="details-overlay" onclick="closeDetailsModal()"></div>
+        <div class="modal-center" id="panel-details">
+            <div class="modal-header">
+                <div class="title-with-icon">
+                    <i data-lucide="info" class="icon-md"></i>
+                    <h2 id="details-title" class="text-truncate">檔案詳情</h2>
+                </div>
+                <button class="btn-close" onclick="closeDetailsModal()">
+                    <i data-lucide="x"></i>
+                </button>
+            </div>
+            <div class="modal-body">
+                <div class="details-section">
+                    <span class="details-label">路徑</span>
+                    <div id="details-path" class="details-path-box"></div>
+                </div>
+                <div class="details-section" style="margin-top: 32px;">
+                    <span class="details-label">AI 內容總結</span>
+                    <div id="details-summary" class="details-summary-text"></div>
+                </div>
+                <div class="details-section" style="margin-top: 32px;">
+                    <span class="details-label">完整關鍵字清單 (<span id="details-keyword-count">0</span>)</span>
+                    <div id="details-keywords" class="result-tags"></div>
                 </div>
             </div>
         </div>
     </div>
 
-    <script src="/static/app.js?v=3"></script>
+    <script src="/static/app.js?v=11"></script>
     <script>
         // Initialize Lucide icons on page load
         document.addEventListener('DOMContentLoaded', () => {

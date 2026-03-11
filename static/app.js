@@ -101,7 +101,7 @@ function removeAttachment() {
 async function doSearch() {
     const input = document.getElementById('search-input');
     const query = input.value.trim();
-    if ((!query && !attachedFile) || isSearching) return;
+    if (isSearching) return;
 
     isSearching = true;
     const btn = document.getElementById('btn-search');
@@ -133,10 +133,16 @@ async function doSearch() {
             data = await res.json();
         }
 
-        const fileTag = data.uploaded_file
-            ? ` + <span class="attached-tag">分析物件: ${escapeHtml(data.uploaded_file)}</span>`
-            : '';
-        meta.innerHTML = `找到 ${data.total_results} 個相關對象${fileTag} — <span class="expanded-query">${escapeHtml(data.expanded_query)}</span>`;
+        if (attachedFile) {
+            const fileTag = data.uploaded_file
+                ? ` + <span class="attached-tag">分析物件: ${escapeHtml(data.uploaded_file)}</span>`
+                : '';
+            meta.innerHTML = `找到 ${data.total_results} 個相關對象${fileTag} — <span class="expanded-query">${escapeHtml(data.expanded_query)}</span>`;
+        } else if (!query) {
+            meta.innerHTML = `正在瀏覽所有檔案 — 顯示前 ${data.total_results} 個最新項目`;
+        } else {
+            meta.innerHTML = `找到 ${data.total_results} 個相關對象 — <span class="expanded-query">${escapeHtml(data.expanded_query)}</span>`;
+        }
 
         if (data.results.length === 0) {
             results.innerHTML = `
@@ -146,6 +152,7 @@ async function doSearch() {
                     <p>嘗試調整搜尋語句，或確認資料夾已完成索引</p>
                 </div>`;
         } else {
+            currentResults = []; // clear previous
             results.innerHTML = data.results.map((r, i) => renderResult(r, i, data.expanded_query, data.original_query)).join('');
         }
 
@@ -162,11 +169,18 @@ async function doSearch() {
     }
 }
 
+// Store results globally so the modal can access them
+let currentResults = [];
+
 function renderResult(r, index, expandedQuery, originalQuery) {
+    // Store in global array
+    currentResults[index] = r;
+
     const iconName = getFileIcon(r.file_type);
     const isImage = isImageType(r.file_type);
     const size = formatSize(r.file_size);
-    const keywords = (r.keywords || '').split(' ').filter(k => k);
+    // Split by multiple possible separators (comma, semicolon, newline, bullet points)
+    const keywords = (r.keywords || '').split(/[;,\n•]/).map(k => k.trim()).filter(k => k);
 
     // Combine original and expanded query for better highlighting coverage
     const combinedQuery = (originalQuery || '') + ' ' + (expandedQuery || '');
@@ -205,10 +219,9 @@ function renderResult(r, index, expandedQuery, originalQuery) {
     }
 
     return `
-        <div class="result-card" style="animation-delay: ${index * 0.05}s" 
-             onclick="copyPath('${escapeAttr(r.file_path)}')">
+        <div class="result-card" style="animation-delay: ${index * 0.05}s">
             ${imagePreview}
-            <div class="result-header">
+            <div class="result-header" onclick="copyPath('${escapeAttr(r.file_path)}')">
                 <div class="result-icon-container">
                     <i data-lucide="${iconName}" class="icon-md"></i>
                 </div>
@@ -216,6 +229,9 @@ function renderResult(r, index, expandedQuery, originalQuery) {
                     <h3>${highlightedName}</h3>
                     <div class="result-path">${escapeHtml(r.file_path)}</div>
                 </div>
+                <button class="btn-icon-ghost" onclick="event.stopPropagation(); showFileDetails(${index})" title="查看完整資訊" style="margin-left: auto;">
+                    <i data-lucide="info" class="icon-sm"></i>
+                </button>
             </div>
             <div class="result-summary">${highlightedSummary || '無詳細描述'}</div>
             <div class="result-tags">
@@ -360,14 +376,8 @@ async function loadStats() {
     }
 }
 
-async function clearIndex() {
-    if (!confirm('確定要清除所有索引嗎？')) return;
-    try {
-        await fetch(`${API}/api/clear`, { method: 'POST' });
-        loadStats();
-        loadWatchedFolders();
-    } catch { }
-}
+
+
 
 // ── UI UI UI ──
 function showPanel(name) {
@@ -376,6 +386,7 @@ function showPanel(name) {
     if (name === 'settings') {
         loadStats();
         loadWatchedFolders();
+        loadLLMSettings();
     }
 }
 
@@ -385,8 +396,96 @@ function hidePanel() {
 }
 
 document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') hidePanel();
+    if (e.key === 'Escape') {
+        hidePanel();
+        closeDetailsModal();
+    }
 });
+
+// ── Details Modal ──
+function showFileDetails(index) {
+    const r = currentResults[index];
+    if (!r) return;
+
+    document.getElementById('details-title').textContent = r.file_name;
+    document.getElementById('details-path').textContent = r.file_path;
+    document.getElementById('details-summary').textContent = r.summary || '無總結資訊';
+
+    const keywords = (r.keywords || '').split(',').map(k => k.trim()).filter(k => k);
+    document.getElementById('details-keyword-count').textContent = keywords.length;
+
+    const tagsHtml = keywords.map(k => `<span class="tag">${escapeHtml(k)}</span>`).join('');
+    document.getElementById('details-keywords').innerHTML = tagsHtml || '<span class="text-muted">無關鍵字</span>';
+
+    document.getElementById('details-overlay').classList.add('active');
+    document.getElementById('panel-details').classList.add('active');
+    if (window.lucide) lucide.createIcons();
+}
+
+function closeDetailsModal() {
+    document.getElementById('details-overlay').classList.remove('active');
+    document.getElementById('panel-details').classList.remove('active');
+}
+
+// ── LLM Settings ──
+async function loadLLMSettings() {
+    const select = document.getElementById('select-llm-model');
+    try {
+        const res = await fetch(`${API}/api/llm/models`);
+        const data = await res.json();
+
+        if (data.available_models && data.available_models.length > 0) {
+            select.innerHTML = data.available_models.map(m =>
+                `<option value="${escapeAttr(m)}" ${m === data.selected_model ? 'selected' : ''}>${escapeHtml(m)}</option>`
+            ).join('');
+
+            if (!data.model_available && data.selected_model) {
+                // Warning if selected model is not in available list
+                const opt = document.createElement('option');
+                opt.value = data.selected_model;
+                opt.selected = true;
+                opt.textContent = `${data.selected_model} (未安裝!)`;
+                opt.style.color = '#ef4444';
+                select.prepend(opt);
+            }
+        } else {
+            // No models found but Ollama might be running
+            select.innerHTML = `<option value="">請先在 Ollama 中下載模型</option>`;
+            if (data.selected_model) {
+                const opt = document.createElement('option');
+                opt.value = data.selected_model;
+                opt.selected = true;
+                opt.textContent = `${data.selected_model} (未安裝!)`;
+                opt.style.color = '#ef4444';
+                select.prepend(opt);
+            }
+        }
+    } catch (err) {
+        select.innerHTML = '<option value="">無法載入模型清單</option>';
+    }
+}
+
+async function updateLLMModel() {
+    const select = document.getElementById('select-llm-model');
+    const model = select.value;
+    if (!model) return;
+
+    try {
+        const res = await fetch(`${API}/api/llm/model`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ model: model }),
+        });
+        const data = await res.json();
+        console.log('[LLM] Model updated:', data.message);
+
+        // Show a brief success highlight
+        select.style.borderColor = '#10b981';
+        setTimeout(() => select.style.borderColor = '', 1500);
+    } catch (err) {
+        alert('更新模型失敗: ' + err.message);
+    }
+}
 
 // ── Helpers ──
 function getFileIcon(ext) {
@@ -439,3 +538,99 @@ function copyPath(path) {
         setTimeout(() => toast.remove(), 2000);
     });
 }
+async function showAiLogs() {
+    try {
+        const res = await fetch(`${API}/api/llm/logs`);
+        const data = await res.json();
+        const logContent = data.logs || '（目前沒有日誌記錄）';
+
+        // Remove any existing overlay
+        const existing = document.getElementById('log-modal-overlay');
+        if (existing) existing.remove();
+
+        // Build modal
+        const overlay = document.createElement('div');
+        overlay.id = 'log-modal-overlay';
+        overlay.className = 'log-modal-overlay';
+        overlay.innerHTML = `
+            <div class="log-modal" role="dialog" aria-modal="true">
+                <div class="log-modal-header">
+                    <div class="log-modal-title">
+                        <i data-lucide="terminal" class="icon-sm"></i>
+                        <h3>AI 引擎日誌 <span style="font-weight:400; color:var(--text-dim); font-size:0.8rem;">（最後 100 行）</span></h3>
+                    </div>
+                    <button class="btn-close" id="log-close-btn" title="關閉">
+                        <i data-lucide="x"></i>
+                    </button>
+                </div>
+                <div class="log-modal-body">
+                    <pre class="log-pre" id="log-pre-content"></pre>
+                </div>
+                <div class="log-modal-footer">
+                    <button class="btn btn-ghost btn-xs" id="log-refresh-btn">
+                        <i data-lucide="refresh-cw" class="icon-xs"></i>
+                        重新整理
+                    </button>
+                    <button class="btn btn-ghost" id="log-close-btn-2">關閉</button>
+                </div>
+            </div>`;
+
+        document.body.appendChild(overlay);
+        if (window.lucide) lucide.createIcons();
+
+        // Set content & scroll to bottom
+        const pre = document.getElementById('log-pre-content');
+        pre.textContent = logContent;
+        pre.scrollTop = pre.scrollHeight;
+
+        // Event handlers
+        const closeLog = () => overlay.remove();
+        document.getElementById('log-close-btn').addEventListener('click', closeLog);
+        document.getElementById('log-close-btn-2').addEventListener('click', closeLog);
+        document.getElementById('log-refresh-btn').addEventListener('click', async () => {
+            const r2 = await fetch(`${API}/api/llm/logs`);
+            const d2 = await r2.json();
+            pre.textContent = d2.logs || '（沒有日誌記錄）';
+            pre.scrollTop = pre.scrollHeight;
+        });
+        // Click outside to close
+        overlay.addEventListener('click', (e) => { if (e.target === overlay) closeLog(); });
+        // Escape key to close
+        const escHandler = (e) => { if (e.key === 'Escape') { closeLog(); document.removeEventListener('keydown', escHandler); } };
+        document.addEventListener('keydown', escHandler);
+
+    } catch (e) {
+        alert(`讀取日誌失敗: ${e.message}`);
+    }
+}
+
+async function clearIndex() {
+    if (!confirm('確定要清除所有索引資料嗎？\n此操作無法復原，需要重新索引所有資料夾。')) return;
+    try {
+        const res = await fetch(`${API}/api/clear`, { method: 'POST' });
+        const data = await res.json();
+
+        if (!res.ok) {
+            throw new Error(data.error || '清除失敗 (HTTP ' + res.status + ')');
+        }
+
+        loadStats();
+        loadWatchedFolders();
+        // Show success toast
+        const toast = document.createElement('div');
+        toast.style.cssText = `
+            position: fixed; bottom: 32px; left: 50%; transform: translateX(-50%);
+            background: var(--zinc-800); color: var(--text-main);
+            padding: 10px 18px; border-radius: 8px; font-size: 0.8rem;
+            border: 1px solid var(--border); box-shadow: 0 10px 40px rgba(0,0,0,0.5);
+            z-index: 2000; animation: fadeIn 0.2s ease; display:flex; gap:8px; align-items:center;
+        `;
+        toast.innerHTML = `<i data-lucide="check-circle" style="width:14px;height:14px;color:#10b981"></i> 索引已清除`;
+        document.body.appendChild(toast);
+        if (window.lucide) lucide.createIcons();
+        setTimeout(() => toast.remove(), 2500);
+    } catch (err) {
+        alert('清除失敗: ' + err.message);
+    }
+}
+

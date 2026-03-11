@@ -22,26 +22,27 @@ class FileChangeHandler(FileSystemEventHandler):
 
     def on_created(self, event):
         if not event.is_directory:
-            self._schedule_index(event.src_path)
+            self._schedule_index(os.path.normpath(event.src_path))
 
     def on_modified(self, event):
         if not event.is_directory:
-            self._schedule_index(event.src_path)
+            self._schedule_index(os.path.normpath(event.src_path))
 
     def on_moved(self, event):
         if not event.is_directory:
             # Remove old file from index
             self.loop.call_soon_threadsafe(
-                database.remove_file, event.src_path
+                database.remove_file, os.path.normpath(event.src_path)
             )
             # Index new file
-            self._schedule_index(event.dest_path)
+            self._schedule_index(os.path.normpath(event.dest_path))
 
     def on_deleted(self, event):
         if not event.is_directory:
-            print(f"[Watcher] File deleted: {event.src_path}")
+            normalized = os.path.normpath(event.src_path)
+            print(f"[Watcher] File deleted: {normalized}")
             self.loop.call_soon_threadsafe(
-                database.remove_file, event.src_path
+                database.remove_file, normalized
             )
 
     def _schedule_index(self, file_path: str):

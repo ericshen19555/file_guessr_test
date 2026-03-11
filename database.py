@@ -16,59 +16,80 @@ ES_URL = os.environ.get("ES_URL", "http://127.0.0.1:9200")
 # ──────────────── Elasticsearch ────────────────
 
 _es: Optional[Elasticsearch] = None
+_es_last_failed_check: float = 0.0
+_ES_RETRY_INTERVAL = 15  # seconds before retrying after a failed connection
 
 def _get_es() -> Optional[Elasticsearch]:
     """Get a cached Elasticsearch client (lazy init).
     Tries HTTP first, then HTTPS (for ES 8.x which enables security by default).
+    Re-tries connection every _ES_RETRY_INTERVAL seconds after failure so that
+    apps launched via desktop shortcut (before ES is fully ready) will
+    automatically reconnect once the service comes up.
     """
-    global _es
-    if _es is None:
-        # Try configured URL first
-        urls_to_try = [ES_URL]
-        # Also try HTTPS if configured URL is HTTP
-        if ES_URL.startswith("http://"):
-            urls_to_try.append(ES_URL.replace("http://", "https://"))
+    global _es, _es_last_failed_check
 
-        for url in urls_to_try:
-            # Fast socket check before trying heavy Elasticsearch client info()
+    # Already connected
+    if _es is not None:
+        return _es
+
+    # Rate-limit reconnection attempts to avoid hammering ES on every request
+    now = time.time()
+    if _es_last_failed_check > 0 and (now - _es_last_failed_check) < _ES_RETRY_INTERVAL:
+        return None
+
+    # Try configured URL first
+    urls_to_try = [ES_URL]
+    # Also try HTTPS if configured URL is HTTP
+    if ES_URL.startswith("http://"):
+        urls_to_try.append(ES_URL.replace("http://", "https://"))
+
+    for url in urls_to_try:
+        # Fast socket check before trying heavy Elasticsearch client info()
+        try:
+            # Parse host and port
+            from urllib.parse import urlparse
+            parsed = urlparse(url)
+            host = parsed.hostname
+            port = parsed.port or (443 if url.startswith("https") else 80)
+
+            # Check if port is open with a very short timeout
+            with socket.create_connection((host, port), timeout=0.5):
+                pass
+        except Exception:
+            # Port is likely closed, skip this URL
+            continue
+
+        try:
+            kwargs = {}
+            if url.startswith("https://"):
+                kwargs["verify_certs"] = False
+                kwargs["ssl_show_warn"] = False
+
+            # Check for credentials
+            es_password = os.environ.get("ES_PASSWORD", "")
+            if es_password:
+                kwargs["basic_auth"] = ("elastic", es_password)
+
+            # Use short timeout for the check
+            client = Elasticsearch(url, request_timeout=2.0, **kwargs)
+            info = client.info()
+            _es = client
+            _es_last_failed_check = 0.0  # Reset failure timer on success
+            version = info.get("version", {}).get("number", "unknown")
+            print(f"[ES] Connected to Elasticsearch {version} at {url}")
+            # Ensure index exists now that we have a connection
             try:
-                # Parse host and port
-                from urllib.parse import urlparse
-                parsed = urlparse(url)
-                host = parsed.hostname
-                port = parsed.port or (443 if url.startswith("https") else 80)
-                
-                # Check if port is open with a very short timeout
-                with socket.create_connection((host, port), timeout=0.5):
-                    pass
+                _ensure_index()
             except Exception:
-                # Port is likely closed, skip this URL
-                continue
+                pass
+            return _es
+        except Exception as e:
+            print(f"[ES] Cannot connect to {url}: {e}")
 
-            try:
-                kwargs = {}
-                if url.startswith("https://"):
-                    kwargs["verify_certs"] = False
-                    kwargs["ssl_show_warn"] = False
-
-                # Check for credentials
-                es_password = os.environ.get("ES_PASSWORD", "")
-                if es_password:
-                    kwargs["basic_auth"] = ("elastic", es_password)
-
-                # Use short timeout for the check
-                client = Elasticsearch(url, request_timeout=2.0, **kwargs)
-                info = client.info()
-                _es = client
-                version = info.get("version", {}).get("number", "unknown")
-                print(f"[ES] Connected to Elasticsearch {version} at {url}")
-                break
-            except Exception as e:
-                print(f"[ES] Cannot connect to {url}: {e}")
-
-        if _es is None:
-            print("[ES] WARNING: Elasticsearch not available, using SQLite fallback")
-    return _es
+    # All URLs failed — record failure time for retry throttling
+    _es_last_failed_check = time.time()
+    print("[ES] WARNING: Elasticsearch not available, using SQLite fallback")
+    return None
 
 
 def _ensure_index():
@@ -85,11 +106,22 @@ def _ensure_index():
             "number_of_shards": 1,
             "number_of_replicas": 0,
             "analysis": {
+                "tokenizer": {
+                    "comma_tokenizer": {
+                        "type": "pattern",
+                        "pattern": ",\\s*"
+                    }
+                },
                 "analyzer": {
                     "file_analyzer": {
                         "type": "custom",
                         "tokenizer": "standard",
                         "filter": ["lowercase", "asciifolding"]
+                    },
+                    "keyword_analyzer": {
+                        "type": "custom",
+                        "tokenizer": "comma_tokenizer",
+                        "filter": ["lowercase", "trim", "asciifolding"]
                     }
                 }
             }
@@ -98,7 +130,16 @@ def _ensure_index():
             "properties": {
                 "file_name":     {"type": "text", "analyzer": "file_analyzer"},
                 "summary":       {"type": "text", "analyzer": "file_analyzer"},
-                "keywords":      {"type": "text", "analyzer": "file_analyzer"},
+                "keywords":      {
+                    "type": "text",
+                    "analyzer": "keyword_analyzer",
+                    "fields": {
+                        "full": {
+                            "type": "text",
+                            "analyzer": "file_analyzer"
+                        }
+                    }
+                },
                 "raw_text":      {"type": "text", "analyzer": "file_analyzer"},
                 "file_path":     {"type": "keyword"},
                 "file_type":     {"type": "keyword"},
@@ -147,8 +188,17 @@ def _delete_from_es(file_path: str):
 
 def _path_to_id(file_path: str) -> str:
     """Convert a file path to an ES-safe document ID."""
-    # Replace backslashes and special chars
-    return re.sub(r'[^a-zA-Z0-9_.\-]', '_', file_path)
+    # Normalize first, then replace special chars
+    normalized = _normalize_path(file_path)
+    return re.sub(r'[^a-zA-Z0-9_.\-]', '_', normalized)
+
+
+def _normalize_path(path: str) -> str:
+    """Normalize a file path for consistent storage and lookup.
+    Ensures forward-slash paths (tkinter) and backslash paths (watchdog)
+    are stored in the same format.
+    """
+    return os.path.normpath(path)
 
 
 # ──────────────── SQLite ────────────────
@@ -156,6 +206,7 @@ def _path_to_id(file_path: str) -> str:
 def get_connection() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
+    # Enable WAL mode for better concurrency (multiple readers + 1 writer)
     conn.execute("PRAGMA journal_mode=WAL")
     return conn
 
@@ -190,6 +241,16 @@ def init_db():
         )
     """)
 
+    # Store generic settings (llm_model, etc.)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS settings (
+            key TEXT PRIMARY KEY,
+            value TEXT
+        )
+    """)
+    # Insert default model if not exists
+    cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('llm_model', 'gemma3:4b')")
+
     conn.commit()
     conn.close()
 
@@ -202,10 +263,33 @@ def init_db():
 
 # ──────────────── CRUD ────────────────
 
+def get_setting(key: str, default: str = "") -> str:
+    """Get a setting value from SQLite."""
+    conn = get_connection()
+    row = conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
+    conn.close()
+    return row["value"] if row else default
+
+
+def set_setting(key: str, value: str):
+    """Set a setting value in SQLite."""
+    conn = get_connection()
+    conn.execute("""
+        INSERT INTO settings (key, value)
+        VALUES (?, ?)
+        ON CONFLICT(key) DO UPDATE SET value=excluded.value
+    """, (key, value))
+    conn.commit()
+    conn.close()
+
+
 def upsert_file(file_path: str, file_name: str, file_type: str,
                 file_size: int, modified_time: float,
                 summary: str, keywords: str, raw_text: str):
     """Insert or update a file record in both SQLite and ES."""
+    from llm import ai_logger
+    ai_logger.info(f"[DB] Upserting {file_name}: keywords={len(keywords)}, summary={len(summary)}")
+    file_path = _normalize_path(file_path)
     conn = get_connection()
     conn.execute("""
         INSERT INTO files (file_path, file_name, file_type, file_size, modified_time,
@@ -252,46 +336,78 @@ def _search_es(query: str, limit: int = 20) -> list[dict]:
     if es is None:
         return []
 
-    body = {
-        "size": limit,
-        "query": {
-            "bool": {
-                "should": [
-                    # Main multi_match with fuzziness for typo tolerance
-                    {
-                        "multi_match": {
-                            "query": query,
-                            "fields": ["file_name^3", "keywords^2.5", "summary^2", "raw_text"],
-                            "type": "best_fields",
-                            "fuzziness": "AUTO",
-                            "prefix_length": 1,
-                        }
-                    },
-                    # Exact phrase match (boosted higher)
-                    {
-                        "multi_match": {
-                            "query": query,
-                            "fields": ["file_name^5", "keywords^4", "summary^3", "raw_text^2"],
-                            "type": "phrase",
-                            "boost": 2.0,
-                        }
-                    },
-                    # Wildcard-like: match each term individually with OR
-                    {
-                        "multi_match": {
-                            "query": query,
-                            "fields": ["file_name^3", "keywords^2.5", "summary^2", "raw_text"],
-                            "type": "cross_fields",
-                            "operator": "or",
-                        }
-                    },
-                ],
-                "minimum_should_match": 1,
-            }
-        },
-        "_source": ["file_path", "file_name", "file_type", "file_size",
-                     "summary", "keywords", "modified_time"],
-    }
+    if not query:
+        # Empty query: return most recent files using match_all
+        body = {
+            "size": limit,
+            "query": {"match_all": {}},
+            "sort": [{"modified_time": {"order": "desc"}}],
+            "_source": ["file_path", "file_name", "file_type", "file_size",
+                        "summary", "keywords", "modified_time"],
+        }
+    else:
+        # Standard fuzzy search logic
+        body = {
+            "size": limit,
+            "query": {
+                "bool": {
+                    "should": [
+                        # Exact keyword phrase match (comma-separated keywords field)
+                        # Use match_phrase to ensure "binary search" is searched as a complete phrase
+                        {
+                            "match_phrase": {
+                                "keywords": {
+                                    "query": query,
+                                    "boost": 5.0,
+                                }
+                            }
+                        },
+                        # Standard tokenized keyword match (sub-field) with fuzziness
+                        {
+                            "match": {
+                                "keywords.full": {
+                                    "query": query,
+                                    "boost": 2.5,
+                                    "fuzziness": "AUTO",
+                                    "prefix_length": 1,
+                                }
+                            }
+                        },
+                        # Main multi_match with fuzziness for typo tolerance
+                        {
+                            "multi_match": {
+                                "query": query,
+                                "fields": ["file_name^3", "summary^2", "raw_text"],
+                                "type": "best_fields",
+                                "fuzziness": "AUTO",
+                                "prefix_length": 1,
+                            }
+                        },
+                        # Exact phrase match (boosted higher)
+                        {
+                            "multi_match": {
+                                "query": query,
+                                "fields": ["file_name^5", "keywords^4", "summary^3", "raw_text^2"],
+                                "type": "phrase",
+                                        "boost": 2.0,
+                            }
+                        },
+                        # Wildcard-like: match each term individually with OR
+                        {
+                            "multi_match": {
+                                "query": query,
+                                "fields": ["file_name^3", "keywords.full^2.5", "summary^2", "raw_text"],
+                                "type": "cross_fields",
+                                "operator": "or",
+                            }
+                        },
+                    ],
+                    "minimum_should_match": 1,
+                }
+            },
+            "_source": ["file_path", "file_name", "file_type", "file_size",
+                         "summary", "keywords", "modified_time"],
+        }
 
     try:
         resp = es.search(index=ES_INDEX, body=body)
@@ -309,29 +425,40 @@ def _search_es(query: str, limit: int = 20) -> list[dict]:
 def _search_sqlite_fallback(query: str, limit: int = 20) -> list[dict]:
     """Fallback: simple SQLite LIKE search when ES is unavailable."""
     conn = get_connection()
-    terms = query.split()
-    if not terms:
-        conn.close()
-        return []
+    if not query:
+        # Empty query: return most recent files
+        rows = conn.execute(f"""
+            SELECT file_path, file_name, file_type, file_size,
+                   summary, keywords, modified_time
+            FROM files
+            ORDER BY indexed_at DESC
+            LIMIT ?
+        """, [limit]).fetchall()
+    else:
+        terms = query.split()
+        if not terms:
+            conn.close()
+            return []
 
-    # Build LIKE conditions for each term
-    conditions = []
-    params = []
-    for term in terms:
-        like = f"%{term}%"
-        conditions.append(
-            "(file_name LIKE ? OR summary LIKE ? OR keywords LIKE ?)"
-        )
-        params.extend([like, like, like])
+        # Build LIKE conditions for each term
+        conditions = []
+        params = []
+        for term in terms:
+            like = f"%{term}%"
+            conditions.append(
+                "(file_name LIKE ? OR summary LIKE ? OR keywords LIKE ?)"
+            )
+            params.extend([like, like, like])
 
-    where_clause = " OR ".join(conditions)
-    rows = conn.execute(f"""
-        SELECT file_path, file_name, file_type, file_size,
-               summary, keywords, modified_time
-        FROM files
-        WHERE {where_clause}
-        LIMIT ?
-    """, params + [limit]).fetchall()
+        where_clause = " OR ".join(conditions)
+        rows = conn.execute(f"""
+            SELECT file_path, file_name, file_type, file_size,
+                   summary, keywords, modified_time
+            FROM files
+            WHERE {where_clause}
+            ORDER BY modified_time DESC
+            LIMIT ?
+        """, params + [limit]).fetchall()
 
     conn.close()
     return [dict(row) for row in rows]
@@ -339,6 +466,7 @@ def _search_sqlite_fallback(query: str, limit: int = 20) -> list[dict]:
 
 def get_file_modified_time(file_path: str) -> Optional[float]:
     """Get the stored modified_time for a file, or None if not indexed."""
+    file_path = _normalize_path(file_path)
     conn = get_connection()
     row = conn.execute(
         "SELECT modified_time FROM files WHERE file_path = ?", (file_path,)
@@ -390,6 +518,7 @@ def clear_db():
 
 def add_watched_folder(folder_path: str):
     """Add a folder to watch list."""
+    folder_path = _normalize_path(folder_path)
     conn = get_connection()
     conn.execute(
         "INSERT OR IGNORE INTO watched_folders (folder_path, added_at) VALUES (?, ?)",
@@ -409,6 +538,7 @@ def get_watched_folders() -> list[str]:
 
 def remove_watched_folder(folder_path: str):
     """Remove a folder from watch list and its indexed files."""
+    folder_path = _normalize_path(folder_path)
     conn = get_connection()
     # Remove folder from watch list
     conn.execute("DELETE FROM watched_folders WHERE folder_path = ?", (folder_path,))
@@ -423,13 +553,14 @@ def remove_watched_folder(folder_path: str):
         try:
             es.delete_by_query(index=ES_INDEX, body={
                 "query": {"prefix": {"file_path": folder_path}}
-            })
+            }, refresh=True)
         except Exception as e:
             print(f"[ES] Warning: Failed to remove folder files: {e}")
 
 
 def remove_file(file_path: str):
     """Remove a file from both SQLite and ES index."""
+    file_path = _normalize_path(file_path)
     conn = get_connection()
     conn.execute("DELETE FROM files WHERE file_path = ?", (file_path,))
     conn.commit()
